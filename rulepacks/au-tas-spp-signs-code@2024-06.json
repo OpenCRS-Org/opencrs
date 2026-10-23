@@ -1,0 +1,22 @@
+{
+  "rule_pack": "au-tas-spp-signs-code",
+  "version": "2024-06",
+  "title": "Tasmanian illuminated signs visible from roads",
+  "source_title": "Tasmanian Planning Scheme, State Planning Provisions, C1.0 Signs Code, version effective 26 June 2024 (Tasmanian Planning Commission and State Planning Office)",
+  "source_url": "https://www.planning.tas.gov.au/__data/assets/pdf_file/0005/784184/Tasmanian-Planning-Scheme-State-Planning-Provisions-effective-26-June-2024.PDF",
+  "status": "unverified",
+  "status_note": "Checked on 22 October 2026 against clause C1.6.2 of the State Planning Provisions effective 26 June 2024 (p. 290), read from the web.archive.org capture of 2 May 2025 because the source URL refuses automated downloads. That edition has since been amended. Amendments 03/2024, 01/2024, 02/2024 and 05/2025 were read and don't change the Signs Code; amendments 02/2025, 04/2026 and 02/2026 and the current consolidation couldn't be downloaded, so the pack stays unverified until they are checked",
+  "citations": {
+    "creative.motion.allowed": "C1.6.2 A2 and P2 (\"No Performance Criterion\"), p. 290",
+    "creative.motion.no_flashing": "C1.6.2 A2 and P2, p. 290"
+  },
+  "notes": [
+    "Clause C1.6.2 A2: 'An illuminated sign visible from public places in adjacent roads must not create the effect of flashing, animation or movement, unless it is providing direction or safety information.' P2 has no performance criterion, so a permit can't approve a sign that doesn't meet A2. An illuminated sign includes LED screens (C1.3.1). The Signs Code applies to all development for signs unless a particular purpose zone says otherwise (C1.2.1), wherever the Tasmanian Planning Scheme is in effect.",
+    "The same wording is in the version effective 24 January 2024 (Signs Code p. 13) and in the 2022 version, so it has been stable since at least 2022. Amendment 02/2023, which made the June 2024 version, changed only the size of roof and sky signs in Table C1.6. Amendments made since, from the State Planning Office's amendments page as captured by web.archive.org on 7 October 2026: 03/2024 clarification and display home exemption (effective 25 December 2024), 01/2024 hazard codes (29 January 2025), 02/2024 container refund facility (16 July 2025) and 05/2025 noise walls (4 March 2026), each read from web.archive.org captures of the instruments, none touching the Signs Code; and 02/2025 subdivision across zone boundaries, employment training, child care and electricity (18 February 2026), 04/2026 land title and permit requirements (7 September 2026) and 02/2026 Safeguarding Airport Code (9 October 2026), whose instruments couldn't be downloaded. Their titles don't suggest a change to C1.6.2, but that is unchecked. To make this pack draft, check C1.6.2 in the current consolidation at https://tpso.planning.tas.gov.au/tpso/external/tasmanian-planning-scheme.",
+    "There is no statewide dwell time or luminance limit. Performance criterion C1.6.2 P1 (no acceptable solution) decides each illuminated sign on its merits, having regard to the intensity of the lighting, hours of operation, the intended purpose of the changing message, the percentage of the sign showing changing messages, the proposed dwell time and the sign's proximity to electronic traffic control devices, among other things. These are set by each permit; record them on the screen as rules.playback and rules.brightness.",
+    "The Department of State Growth doesn't permit electronic billboards for advertising in State or local road reservations (its electronic billboards page, as captured by web.archive.org in December 2025); that concerns signs placed in the road reserve, not signs on private land."
+  ],
+  "creative": {
+    "motion": { "allowed": false, "no_flashing": true }
+  }
+}

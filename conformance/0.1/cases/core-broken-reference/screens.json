@@ -1,0 +1,44 @@
+{
+  "opencrs": "0.1",
+  "publisher": "conf.example",
+  "updated_at": "2026-10-20T09:00:00+11:00",
+  "expires_at": "2027-06-30T00:00:00+10:00",
+  "networks": [
+    {
+      "id": "n",
+      "name": "Core network",
+      "formats": [
+        {
+          "id": "f",
+          "pixels": [
+            1920,
+            1080
+          ],
+          "media": {
+            "static": [
+              "image/jpeg",
+              "image/png"
+            ],
+            "motion": [
+              "video/mp4"
+            ],
+            "slot_s": 10,
+            "fps": 25,
+            "max_bytes": 5000000
+          }
+        }
+      ],
+      "screens": [
+        {
+          "id": "S1",
+          "format": "f"
+        },
+        {
+          "id": "S2",
+          "format": "f",
+          "venue": "nowhere"
+        }
+      ]
+    }
+  ]
+}

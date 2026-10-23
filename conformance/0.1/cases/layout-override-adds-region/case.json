@@ -1,0 +1,28 @@
+{
+  "id": "layout-override-adds-region",
+  "level": "layout",
+  "spec": "Inheritance (blocked_regions in overrides add to the format's)",
+  "description": "S2's column covers its bottom-left corner, where the legal line sits; the network logo still applies there too.",
+  "now": "2026-10-22T12:00:00+11:00",
+  "specs": [
+    "screens.json"
+  ],
+  "creative": "creative.json",
+  "expect": [
+    {
+      "file": "a.png",
+      "target": "conf.example/n/f",
+      "result": "fail",
+      "checks": [
+        {
+          "code": "CRS-BLOCKED-REGION",
+          "severity": "error",
+          "element": "legal",
+          "screens": [
+            "S2"
+          ]
+        }
+      ]
+    }
+  ]
+}

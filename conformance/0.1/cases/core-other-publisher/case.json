@@ -1,0 +1,12 @@
+{
+  "id": "core-other-publisher",
+  "level": "core",
+  "spec": "Creative manifest: targets",
+  "description": "A target belonging to another publisher isn't this document's to judge: no report.",
+  "now": "2026-10-22T12:00:00+11:00",
+  "specs": [
+    "screens.json"
+  ],
+  "creative": "creative.json",
+  "expect": []
+}

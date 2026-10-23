@@ -1,0 +1,30 @@
+{
+  "id": "full-reading-rate",
+  "level": "full",
+  "spec": "Field reference: reading_rate_wps; Legibility: reading time",
+  "description": "At 1 word per second, S1's 4 s dwell allows 4 words: 5 fails, 4 passes.",
+  "now": "2026-10-22T12:00:00+11:00",
+  "specs": [
+    "screens.json"
+  ],
+  "creative": "creative.json",
+  "expect": [
+    {
+      "file": "five.png",
+      "target": "conf.example/n/screen/S1",
+      "result": "fail",
+      "checks": [
+        {
+          "code": "CRS-MAX-WORDS",
+          "severity": "error"
+        }
+      ]
+    },
+    {
+      "file": "four.png",
+      "target": "conf.example/n/screen/S1",
+      "result": "pass",
+      "checks": []
+    }
+  ]
+}

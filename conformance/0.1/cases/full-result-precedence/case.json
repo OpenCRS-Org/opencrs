@@ -1,0 +1,45 @@
+{
+  "id": "full-result-precedence",
+  "level": "full",
+  "spec": "Results: precedence",
+  "description": "With the category unknown: an error alongside it is fail; a warning alongside it is incomplete.",
+  "now": "2026-10-22T12:00:00+11:00",
+  "specs": [
+    "screens.json"
+  ],
+  "creative": "creative.json",
+  "expect": [
+    {
+      "file": "error.png",
+      "target": "conf.example/n/screen/S1",
+      "result": "fail",
+      "checks": [
+        {
+          "code": "CRS-LEGIBILITY",
+          "severity": "error",
+          "element": "legal"
+        },
+        {
+          "code": "CRS-CATEGORY",
+          "severity": "not_checked"
+        }
+      ]
+    },
+    {
+      "file": "warning.png",
+      "target": "conf.example/n/screen/S1",
+      "result": "incomplete",
+      "checks": [
+        {
+          "code": "CRS-LEGIBILITY",
+          "severity": "warning",
+          "element": "legal"
+        },
+        {
+          "code": "CRS-CATEGORY",
+          "severity": "not_checked"
+        }
+      ]
+    }
+  ]
+}

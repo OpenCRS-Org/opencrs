@@ -1,0 +1,50 @@
+{
+  "rule_pack": "au-nsw-transport-corridor",
+  "version": "2017-11",
+  "title": "NSW digital signs in transport corridors",
+  "source_title": "Transport Corridor Outdoor Advertising and Signage Guidelines (NSW Department of Planning and Environment, November 2017)",
+  "source_url": "https://www.transport.nsw.gov.au/system/files/media/documents/2023/transport-corridor-outdoor-advertising-and-signage-guidelines.pdf",
+  "status": "draft",
+  "status_note": "Every value checked against the source PDF on 22 October 2026 (page citations below); not yet independently reviewed",
+  "citations": {
+    "creative.motion.allowed": "p. 32, Table 3 (a); p. 35, 2.5.11; p. 41, 3.3.2 (a) and (d)",
+    "creative.motion.no_flashing": "p. 33, Table 3 (g); p. 43, illumination criteria (b)",
+    "creative.no_traffic_device_imagery": "p. 32, Table 3 (c); p. 41, additional criteria (a)",
+    "creative.max_words_at_glance": "p. 33, Table 3 (h); p. 41, additional criteria (b)",
+    "creative.no_sequencing": "p. 32, Table 3 (b); p. 45, 3.3.4 (b)",
+    "creative.no_device_interaction": "p. 45, 3.3.4 (a)",
+    "playback.min_dwell_s": "p. 32, Table 3 (d); p. 41, 3.3.2 (b)",
+    "playback.max_transition_s": "p. 32, Table 3 (e); p. 41, 3.3.2 (e)",
+    "playback.failure_state": "p. 32, Table 3 (e); p. 41, 3.3.2 (e)",
+    "playback.school_zone": "p. 33, Table 3 (i); p. 41, 3.3.2 (c)",
+    "playback.max_luminance_cd_m2": "p. 44, Table 6 (zones defined on pp. 43-44)"
+  },
+  "notes": [
+    "Page numbers are the guidelines' printed page numbers; add 2 for the PDF page.",
+    "The source URL refuses automated downloads. The copy checked was the web.archive.org capture of it, whose text is identical to https://www.planning.nsw.gov.au/sites/default/files/2023-03/transport-corridor-outdoor-advertising-and-signage-guidelines.pdf.",
+    "Luminance zones follow Table 6: zone_1 (very high ambient light, e.g. CBDs), zone_2 and zone_3 (high and medium), zone_4 (low, e.g. rural or near homes). Full sun on the face of the sign has no limit in any zone, and zone_1 has no daytime limit.",
+    "school_zone applies to a sign within 250 m of a classified road and visible from a school zone; set placement.school_zone for such signs.",
+    "Not encoded: sign spacing (Table 3 (l)), clearances and road safety checks (Table 3 (m)-(o)), which are siting conditions rather than creative or playback rules."
+  ],
+  "creative": {
+    "motion": { "allowed": false, "no_flashing": true },
+    "no_traffic_device_imagery": true,
+    "max_words_at_glance": true,
+    "no_sequencing": true,
+    "no_device_interaction": true
+  },
+  "playback": {
+    "min_dwell_s": [
+      { "speed_kmh_below": 80, "value": 10 },
+      { "speed_kmh_from": 80, "value": 25 }
+    ],
+    "max_transition_s": 0.1,
+    "failure_state": "black",
+    "school_zone": "fixed_display_during_hours",
+    "max_luminance_cd_m2": {
+      "day": { "zone_1": null, "zone_2": 6000, "zone_3": 6000, "zone_4": 6000 },
+      "twilight": { "zone_1": 700, "zone_2": 700, "zone_3": 700, "zone_4": 500 },
+      "night": { "zone_1": 350, "zone_2": 350, "zone_3": 350, "zone_4": 200 }
+    }
+  }
+}

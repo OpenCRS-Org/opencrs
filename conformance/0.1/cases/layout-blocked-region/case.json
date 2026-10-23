@@ -1,0 +1,29 @@
+{
+  "id": "layout-blocked-region",
+  "level": "layout",
+  "spec": "Standard check codes: CRS-BLOCKED-REGION; Inheritance (overrides.remove.blocked_regions)",
+  "description": "A logo under the network logo fails on S1 and S2; S3 removes that region, so it doesn't apply there.",
+  "now": "2026-10-22T12:00:00+11:00",
+  "specs": [
+    "screens.json"
+  ],
+  "creative": "creative.json",
+  "expect": [
+    {
+      "file": "a.png",
+      "target": "conf.example/n/f",
+      "result": "fail",
+      "checks": [
+        {
+          "code": "CRS-BLOCKED-REGION",
+          "severity": "error",
+          "element": "logo",
+          "screens": [
+            "S1",
+            "S2"
+          ]
+        }
+      ]
+    }
+  ]
+}

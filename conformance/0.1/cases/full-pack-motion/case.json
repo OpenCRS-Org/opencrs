@@ -1,0 +1,55 @@
+{
+  "id": "full-pack-motion",
+  "level": "full",
+  "spec": "Regulatory rule packs: a referenced pack applies in full; CRS-MOTION-PROHIBITED; CRS-TRAFFIC-DEVICE; CRS-SEQUENCING",
+  "description": "The NSW pack applies to both screens, even where the screen allows motion or doesn't face a road. A video is prohibited; a still isn't, but whether it looks like a traffic device always needs a person, and glance text needs the speed.",
+  "now": "2026-10-22T12:00:00+11:00",
+  "specs": [
+    "screens.json"
+  ],
+  "creative": "creative.json",
+  "expect": [
+    {
+      "file": "clip.mp4",
+      "target": "conf.example/road/board",
+      "result": "fail",
+      "checks": [
+        {
+          "code": "CRS-MOTION-PROHIBITED",
+          "severity": "error"
+        },
+        {
+          "code": "CRS-TRAFFIC-DEVICE",
+          "severity": "not_checked"
+        },
+        {
+          "code": "CRS-GLANCE-TEXT",
+          "severity": "not_checked"
+        },
+        {
+          "code": "CRS-SEQUENCING",
+          "severity": "info"
+        }
+      ]
+    },
+    {
+      "file": "still.png",
+      "target": "conf.example/road/board",
+      "result": "incomplete",
+      "checks": [
+        {
+          "code": "CRS-TRAFFIC-DEVICE",
+          "severity": "not_checked"
+        },
+        {
+          "code": "CRS-GLANCE-TEXT",
+          "severity": "not_checked"
+        },
+        {
+          "code": "CRS-SEQUENCING",
+          "severity": "info"
+        }
+      ]
+    }
+  ]
+}

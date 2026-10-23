@@ -1,0 +1,137 @@
+{
+  "opencrs": "0.1",
+  "publisher": "conf.example",
+  "updated_at": "2026-10-20T09:00:00+11:00",
+  "expires_at": "2027-06-30T00:00:00+10:00",
+  "networks": [
+    {
+      "id": "n",
+      "name": "Full network",
+      "rules": {
+        "legibility": {
+          "ratio": 150
+        },
+        "required_elements": [
+          {
+            "role": "legal",
+            "when": "offer",
+            "min_cap_height_mm": 12,
+            "within_rect_px": [
+              0,
+              1500,
+              1080,
+              420
+            ]
+          }
+        ]
+      },
+      "venues": [
+        {
+          "id": "v1",
+          "name": "Centre",
+          "venue_type": 205,
+          "rules": {
+            "required_elements": [
+              {
+                "role": "legal",
+                "when": "offer",
+                "min_cap_height_mm": 16,
+                "within_rect_px": [
+                  0,
+                  1600,
+                  1080,
+                  320
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "formats": [
+        {
+          "id": "totem",
+          "pixels": [
+            1080,
+            1920
+          ],
+          "physical_mm": [
+            940,
+            1670
+          ],
+          "media": {
+            "static": [
+              "image/png",
+              "image/jpeg"
+            ],
+            "motion": [
+              "video/mp4"
+            ],
+            "slot_s": 10,
+            "fps": 30,
+            "max_bytes": 52428800
+          },
+          "safe_area": {
+            "top": 120,
+            "right": 60,
+            "bottom": 160,
+            "left": 60
+          },
+          "blocked_regions": [
+            {
+              "name": "network-logo",
+              "rect_px": [
+                880,
+                40,
+                160,
+                80
+              ]
+            }
+          ]
+        }
+      ],
+      "screens": [
+        {
+          "id": "S1",
+          "format": "totem",
+          "venue": "v1",
+          "viewing": {
+            "distance_m": [
+              2,
+              6
+            ],
+            "dwell_s": 4,
+            "approach": "head-on",
+            "light": "indoor"
+          }
+        },
+        {
+          "id": "S2",
+          "format": "totem",
+          "venue": "v1",
+          "viewing": {
+            "distance_m": [
+              3,
+              10
+            ],
+            "dwell_s": 3,
+            "approach": "oblique",
+            "light": "indoor"
+          },
+          "overrides": {
+            "blocked_regions": [
+              {
+                "name": "column",
+                "rect_px": [
+                  0,
+                  1700,
+                  300,
+                  220
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

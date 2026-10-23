@@ -1,0 +1,28 @@
+{
+  "id": "full-restrictions-tighten",
+  "level": "full",
+  "spec": "Inheritance: restrictions only tighten",
+  "description": "The venue limits words to 3 and bans motion; the format's looser 8 words and allowed motion can't loosen that, though a format beats a venue for specs.",
+  "now": "2026-10-22T12:00:00+11:00",
+  "specs": [
+    "screens.json"
+  ],
+  "creative": "creative.json",
+  "expect": [
+    {
+      "file": "a.mp4",
+      "target": "conf.example/n/screen/S1",
+      "result": "fail",
+      "checks": [
+        {
+          "code": "CRS-MAX-WORDS",
+          "severity": "error"
+        },
+        {
+          "code": "CRS-MOTION",
+          "severity": "error"
+        }
+      ]
+    }
+  ]
+}

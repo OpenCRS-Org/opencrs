@@ -1,0 +1,269 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://opencrs.dev/schema/0.1/screens.schema.json",
+  "title": "OpenCRS 0.1 requirements document (screens.json)",
+  "type": "object",
+  "required": ["opencrs", "publisher", "updated_at", "networks"],
+  "properties": {
+    "opencrs": { "$ref": "common.schema.json#/$defs/version" },
+    "publisher": { "$ref": "common.schema.json#/$defs/domain", "description": "The publisher's domain, matching the index." },
+    "updated_at": { "$ref": "common.schema.json#/$defs/datetime" },
+    "expires_at": { "$ref": "common.schema.json#/$defs/datetime" },
+    "networks": { "type": "array", "items": { "$ref": "#/$defs/network" } },
+    "ext": { "$ref": "common.schema.json#/$defs/ext" }
+  },
+  "$defs": {
+    "network": {
+      "type": "object",
+      "required": ["id", "name", "formats", "screens"],
+      "properties": {
+        "id": { "$ref": "common.schema.json#/$defs/id" },
+        "name": { "type": "string", "minLength": 1 },
+        "rules": { "$ref": "#/$defs/ruleset" },
+        "venues": { "type": "array", "items": { "$ref": "#/$defs/venue" } },
+        "formats": { "type": "array", "items": { "$ref": "#/$defs/format" } },
+        "screens": { "type": "array", "items": { "$ref": "#/$defs/screen" } },
+        "delivery": { "$ref": "#/$defs/delivery" },
+        "ext": { "$ref": "common.schema.json#/$defs/ext" }
+      }
+    },
+    "venue": {
+      "type": "object",
+      "required": ["id", "name"],
+      "properties": {
+        "id": { "$ref": "common.schema.json#/$defs/id" },
+        "name": { "type": "string" },
+        "venue_type": { "type": "integer", "minimum": 1, "description": "OpenOOH 1.2.1 venue type enumeration ID, e.g. 205 (mall). OpenOOH deprecated its string values, so they are not accepted." },
+        "rules": { "$ref": "#/$defs/ruleset" },
+        "address": {
+          "oneOf": [
+            { "type": "string" },
+            {
+              "type": "object",
+              "properties": {
+                "street": { "type": "string" },
+                "locality": { "type": "string" },
+                "region": { "type": "string" },
+                "postcode": { "type": "string" },
+                "country": { "type": "string", "pattern": "^[A-Z]{2}$" }
+              }
+            }
+          ]
+        },
+        "ext": { "$ref": "common.schema.json#/$defs/ext" }
+      }
+    },
+    "format": {
+      "type": "object",
+      "required": ["id", "pixels", "media"],
+      "allOf": [{ "$ref": "#/$defs/format_fields" }],
+      "properties": {
+        "id": { "$ref": "common.schema.json#/$defs/id" }
+      }
+    },
+    "format_fields": {
+      "description": "Fields shared by a Format and a Screen's overrides.",
+      "type": "object",
+      "properties": {
+        "pixels": { "$ref": "common.schema.json#/$defs/pixels" },
+        "physical_mm": { "$ref": "common.schema.json#/$defs/size_mm" },
+        "media": { "$ref": "#/$defs/media" },
+        "safe_area": { "$ref": "common.schema.json#/$defs/insets" },
+        "blocked_regions": { "type": "array", "items": { "$ref": "#/$defs/region" } },
+        "segments": { "type": "array", "items": { "$ref": "#/$defs/segment" } },
+        "rules": { "$ref": "#/$defs/ruleset" },
+        "ext": { "$ref": "common.schema.json#/$defs/ext" }
+      }
+    },
+    "media": {
+      "type": "object",
+      "anyOf": [{ "required": ["static"] }, { "required": ["motion"] }],
+      "properties": {
+        "static": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/media_type" } },
+        "motion": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/media_type" } },
+        "slot_s": { "type": "number", "exclusiveMinimum": 0 },
+        "fps": { "type": "number", "exclusiveMinimum": 0 },
+        "codecs": { "type": "array", "items": { "type": "string" }, "description": "RFC 6381 codec strings, e.g. avc1.640028." },
+        "max_bytes": { "type": "integer", "minimum": 1 },
+        "colour_space": { "type": "string", "examples": ["srgb", "rec709", "display-p3"] },
+        "audio": { "type": "boolean" },
+        "ext": { "$ref": "common.schema.json#/$defs/ext" }
+      }
+    },
+    "region": {
+      "type": "object",
+      "required": ["name", "rect_px"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "rect_px": { "$ref": "common.schema.json#/$defs/rect_px" },
+        "reason": { "enum": ["bezel", "logo", "clock", "obstruction", "overlay", "other"] },
+        "ext": { "$ref": "common.schema.json#/$defs/ext" }
+      }
+    },
+    "segment": {
+      "type": "object",
+      "required": ["id", "rect_px"],
+      "properties": {
+        "id": { "$ref": "common.schema.json#/$defs/id" },
+        "rect_px": { "$ref": "common.schema.json#/$defs/rect_px" },
+        "primary": { "type": "boolean" },
+        "crossing": {
+          "description": "How content meets the next panel: continuous (seamless) or break (a visible seam or corner).",
+          "enum": ["continuous", "break"]
+        },
+        "ext": { "$ref": "common.schema.json#/$defs/ext" }
+      }
+    },
+    "screen": {
+      "type": "object",
+      "required": ["id", "format"],
+      "properties": {
+        "id": { "$ref": "common.schema.json#/$defs/id" },
+        "format": { "$ref": "common.schema.json#/$defs/id" },
+        "venue": { "$ref": "common.schema.json#/$defs/id" },
+        "placement": { "$ref": "#/$defs/placement" },
+        "viewing": { "$ref": "#/$defs/viewing" },
+        "overrides": {
+          "allOf": [{ "$ref": "#/$defs/format_fields" }],
+          "properties": {
+            "remove": {
+              "type": "object",
+              "properties": {
+                "blocked_regions": { "type": "array", "items": { "type": "string" }, "description": "Names of inherited blocked regions that don't apply to this screen." }
+              }
+            }
+          }
+        },
+        "rules": { "$ref": "#/$defs/ruleset" },
+        "platform_ids": { "type": "object", "additionalProperties": { "type": "string" } },
+        "location": {
+          "type": "object",
+          "required": ["lat", "lon"],
+          "properties": {
+            "lat": { "type": "number", "minimum": -90, "maximum": 90 },
+            "lon": { "type": "number", "minimum": -180, "maximum": 180 }
+          }
+        },
+        "ext": { "$ref": "common.schema.json#/$defs/ext" }
+      }
+    },
+    "placement": {
+      "type": "object",
+      "properties": {
+        "environment": { "enum": ["indoor", "outdoor"] },
+        "level": { "type": "string" },
+        "zone": { "type": "string" },
+        "mounted_height_mm": { "type": "number", "minimum": 0 },
+        "facing": {
+          "oneOf": [
+            { "enum": ["N", "NE", "E", "SE", "S", "SW", "W", "NW"] },
+            { "type": "number", "minimum": 0, "exclusiveMaximum": 360 }
+          ]
+        },
+        "motion_allowed": { "type": "boolean" },
+        "speed_kmh": { "type": "number", "minimum": 0, "description": "Speed limit of the road the screen faces, for rule packs." },
+        "faces_road": { "type": "boolean" },
+        "school_zone": { "type": "boolean" },
+        "luminance_zone": { "type": "string", "description": "Lighting zone named by a rule pack, e.g. zone_4." },
+        "ext": { "$ref": "common.schema.json#/$defs/ext" }
+      }
+    },
+    "viewing": {
+      "type": "object",
+      "properties": {
+        "distance_m": { "$ref": "common.schema.json#/$defs/range_m" },
+        "dwell_s": { "type": "number", "exclusiveMinimum": 0 },
+        "approach": { "enum": ["head-on", "oblique"] },
+        "light": { "enum": ["indoor", "daylight", "night"] },
+        "ext": { "$ref": "common.schema.json#/$defs/ext" }
+      }
+    },
+    "ruleset": {
+      "description": "Restrictions only tighten down the chain network → venue → format → screen: categories and rule packs accumulate and can't be removed, and numeric limits take the stricter value.",
+      "type": "object",
+      "properties": {
+        "legibility": {
+          "type": "object",
+          "properties": {
+            "min_cap_height_mm": { "type": "number", "exclusiveMinimum": 0 },
+            "min_legal_cap_height_mm": { "type": "number", "exclusiveMinimum": 0 },
+            "ratio": { "type": "number", "exclusiveMinimum": 0, "description": "Text should be readable at this many times its cap height." },
+            "ext": { "$ref": "common.schema.json#/$defs/ext" }
+          }
+        },
+        "required_elements": { "type": "array", "items": { "$ref": "#/$defs/required_element" } },
+        "max_words": { "type": "integer", "minimum": 1 },
+        "reading_rate_wps": { "type": "number", "exclusiveMinimum": 0, "description": "Words per second used to derive max_words from dwell. Default 2." },
+        "restricted_categories": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/iab_category" } },
+        "motion": {
+          "type": "object",
+          "properties": {
+            "allowed": { "type": "boolean" },
+            "no_flashing": { "type": "boolean" },
+            "max_flash_hz": { "type": "number", "minimum": 0 },
+            "min_frame_hold_s": { "type": "number", "minimum": 0 },
+            "ext": { "$ref": "common.schema.json#/$defs/ext" }
+          }
+        },
+        "brightness": {
+          "type": "object",
+          "properties": {
+            "max_night_cd_m2": { "type": "number", "minimum": 0 },
+            "max_day_cd_m2": { "type": "number", "minimum": 0 }
+          }
+        },
+        "playback": {
+          "description": "Playback limits the screen platform enforces, such as a site consent's dwell time. Validators report them as info.",
+          "type": "object",
+          "properties": {
+            "min_dwell_s": { "type": "number", "minimum": 0 },
+            "max_transition_s": { "type": "number", "minimum": 0 },
+            "ext": { "$ref": "common.schema.json#/$defs/ext" }
+          }
+        },
+        "rule_packs": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/rule_pack_ref" } },
+        "notes": { "type": "string" },
+        "lang": { "type": "string", "description": "BCP 47 language tag for notes and element text, e.g. en-AU." },
+        "remove": {
+          "description": "Inherited items that don't apply at this level. Only non-regulatory items can be removed; restricted categories and rule packs can't.",
+          "type": "object",
+          "properties": {
+            "required_elements": { "type": "array", "items": { "type": "string" }, "description": "Roles to drop." },
+            "restricted_categories": false,
+            "rule_packs": false
+          }
+        },
+        "ext": { "$ref": "common.schema.json#/$defs/ext" }
+      }
+    },
+    "required_element": {
+      "type": "object",
+      "required": ["role"],
+      "properties": {
+        "role": { "type": "string", "minLength": 1, "examples": ["legal", "logo", "headline"] },
+        "when": { "type": "string", "description": "Applies only to creative tagged with this value, e.g. offer." },
+        "min_cap_height_mm": { "type": "number", "exclusiveMinimum": 0 },
+        "min_cap_height_px": { "type": "integer", "minimum": 1 },
+        "within_rect_px": { "$ref": "common.schema.json#/$defs/rect_px" },
+        "notes": { "type": "string" },
+        "ext": { "$ref": "common.schema.json#/$defs/ext" }
+      }
+    },
+    "delivery": {
+      "type": "object",
+      "properties": {
+        "lead_time_hours": { "type": "integer", "minimum": 0 },
+        "submit": {
+          "type": "object",
+          "properties": {
+            "portal": { "type": "string", "pattern": "^https?://" },
+            "api": { "type": "string", "pattern": "^https?://" },
+            "email": { "type": "string", "pattern": "^[^@\\s]+@[^@\\s]+$" }
+          }
+        },
+        "file_naming": { "type": "string" },
+        "ext": { "$ref": "common.schema.json#/$defs/ext" }
+      }
+    }
+  }
+}

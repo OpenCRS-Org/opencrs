@@ -1,0 +1,28 @@
+name: CLI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    # 20,000-screen network: records timings in the job summary and fails if
+    # the per-screen check takes more than 3x bench/ci-baseline.txt.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable (a branch)
+        with:
+          toolchain: "1.95" # keep in step with rust-toolchain.toml
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Install hyperfine
+        run: sudo apt-get install -y --no-install-recommends hyperfine
+      - name: Benchmark
+        env:
+          BENCH_ENFORCE: "1"
+        run: bench/run.sh

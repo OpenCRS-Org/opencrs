@@ -1,0 +1,24 @@
+{
+  "id": "core-sha-mismatch",
+  "level": "core",
+  "spec": "Creative manifest: sha256; the file wins over the manifest",
+  "description": "A file whose SHA-256 differs from the manifest's isn't the declared file: error.",
+  "now": "2026-10-22T12:00:00+11:00",
+  "specs": [
+    "screens.json"
+  ],
+  "creative": "creative.json",
+  "expect": [
+    {
+      "file": "a.png",
+      "target": "conf.example/n/f",
+      "result": "fail",
+      "checks": [
+        {
+          "code": "CRS-MANIFEST-MISMATCH",
+          "severity": "error"
+        }
+      ]
+    }
+  ]
+}

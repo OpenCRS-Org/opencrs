@@ -1,0 +1,24 @@
+{
+  "id": "core-file-duration",
+  "level": "core",
+  "spec": "Creative manifest: the file wins over the manifest (duration)",
+  "description": "The MP4 itself runs 10 s, matching the slot, although the manifest says 12 s: the duration passes and the disagreement is a warning.",
+  "now": "2026-10-22T12:00:00+11:00",
+  "specs": [
+    "screens.json"
+  ],
+  "creative": "creative.json",
+  "expect": [
+    {
+      "file": "clip.mp4",
+      "target": "conf.example/n/f",
+      "result": "warn",
+      "checks": [
+        {
+          "code": "CRS-MANIFEST-MISMATCH",
+          "severity": "warning"
+        }
+      ]
+    }
+  ]
+}

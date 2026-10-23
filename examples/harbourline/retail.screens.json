@@ -1,0 +1,72 @@
+{
+  "opencrs": "0.1",
+  "publisher": "harbourline.example",
+  "updated_at": "2026-10-20T09:00:00+11:00",
+  "expires_at": "2027-01-20T00:00:00+11:00",
+  "networks": [
+    {
+      "id": "retail",
+      "name": "Harbourline Retail Screens",
+      "rules": {
+        "legibility": { "ratio": 150 },
+        "restricted_categories": ["IAB7-5"],
+        "required_elements": [
+          { "role": "legal", "when": "offer", "min_cap_height_mm": 12 }
+        ],
+        "motion": { "max_flash_hz": 3 }
+      },
+      "venues": [
+        { "id": "harbour-central", "name": "Harbour Central", "venue_type": 205 }
+      ],
+      "formats": [
+        {
+          "id": "portrait-totem-75",
+          "pixels": [1080, 1920],
+          "physical_mm": [940, 1670],
+          "media": {
+            "static": ["image/jpeg", "image/png"],
+            "motion": ["video/mp4"],
+            "slot_s": 10, "fps": 30, "max_bytes": 52428800,
+            "colour_space": "srgb", "audio": false
+          },
+          "safe_area": { "top": 120, "right": 60, "bottom": 160, "left": 60 },
+          "blocked_regions": [
+            { "name": "network-logo", "rect_px": [880, 40, 160, 80] }
+          ]
+        },
+        {
+          "id": "atrium-wrap",
+          "pixels": [5760, 1080],
+          "physical_mm": [12000, 2250],
+          "media": { "static": ["image/png"], "motion": ["video/mp4"], "slot_s": 15, "fps": 25 },
+          "segments": [
+            { "id": "left", "rect_px": [0, 0, 1920, 1080] },
+            { "id": "front", "rect_px": [1920, 0, 1920, 1080], "primary": true },
+            { "id": "right", "rect_px": [3840, 0, 1920, 1080] }
+          ],
+          "rules": { "notes": "Keep the main message on the front panel; side panels are seen at an angle." }
+        }
+      ],
+      "screens": [
+        {
+          "id": "HC-L1-001", "format": "portrait-totem-75", "venue": "harbour-central",
+          "placement": { "environment": "indoor", "level": "L1", "zone": "food court", "mounted_height_mm": 0 },
+          "viewing": { "distance_m": [2, 6], "dwell_s": 4, "approach": "head-on", "light": "indoor" },
+          "platform_ids": { "cms-a": "frame-4411" }
+        },
+        {
+          "id": "HC-L1-002", "format": "portrait-totem-75", "venue": "harbour-central",
+          "viewing": { "distance_m": [3, 10], "dwell_s": 3, "approach": "oblique", "light": "indoor" },
+          "overrides": { "blocked_regions": [ { "name": "column", "rect_px": [0, 1700, 300, 220] } ] },
+          "platform_ids": { "cms-a": "frame-4412" }
+        },
+        {
+          "id": "HC-ATR-001", "format": "atrium-wrap", "venue": "harbour-central",
+          "viewing": { "distance_m": [8, 30], "dwell_s": 6, "light": "daylight" },
+          "platform_ids": { "cms-b": "du-77812" }
+        }
+      ],
+      "delivery": { "lead_time_hours": 72, "submit": { "portal": "https://screens.harbourline.example/submit" } }
+    }
+  ]
+}

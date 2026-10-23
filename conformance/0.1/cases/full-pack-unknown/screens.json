@@ -1,0 +1,42 @@
+{
+  "opencrs": "0.1",
+  "publisher": "conf.example",
+  "updated_at": "2026-10-20T09:00:00+11:00",
+  "expires_at": "2027-06-30T00:00:00+10:00",
+  "networks": [
+    {
+      "id": "road",
+      "name": "Roadside",
+      "formats": [
+        {
+          "id": "board",
+          "pixels": [
+            1000,
+            500
+          ],
+          "media": {
+            "static": [
+              "image/png"
+            ],
+            "motion": [
+              "video/mp4"
+            ],
+            "slot_s": 10,
+            "fps": 25
+          }
+        }
+      ],
+      "screens": [
+        {
+          "id": "R1",
+          "format": "board",
+          "rules": {
+            "rule_packs": [
+              "au-xx-unknown-pack@2026-01"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

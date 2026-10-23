@@ -1,0 +1,30 @@
+{
+  "id": "full-required-size",
+  "level": "full",
+  "spec": "Standard check codes: CRS-REQUIRED-ELEMENT (size)",
+  "description": "The legal line must be 12 mm = 14 px on offer creative; 13 px fails that, and the 16 px legibility minimum.",
+  "now": "2026-10-22T12:00:00+11:00",
+  "specs": [
+    "screens.json"
+  ],
+  "creative": "creative.json",
+  "expect": [
+    {
+      "file": "a.png",
+      "target": "conf.example/n/screen/S1",
+      "result": "fail",
+      "checks": [
+        {
+          "code": "CRS-REQUIRED-ELEMENT",
+          "severity": "error",
+          "element": "legal"
+        },
+        {
+          "code": "CRS-LEGIBILITY",
+          "severity": "error",
+          "element": "legal"
+        }
+      ]
+    }
+  ]
+}

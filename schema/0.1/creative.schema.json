@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://opencrs.dev/schema/0.1/creative.schema.json",
+  "title": "OpenCRS 0.1 creative manifest (creative.json)",
+  "type": "object",
+  "required": ["opencrs", "files"],
+  "properties": {
+    "opencrs": { "$ref": "common.schema.json#/$defs/version" },
+    "campaign": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "advertiser": { "type": "string" },
+        "category": { "$ref": "common.schema.json#/$defs/iab_category" },
+        "tags": { "$ref": "#/$defs/tags" },
+        "ext": { "$ref": "common.schema.json#/$defs/ext" }
+      }
+    },
+    "files": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/file" } },
+    "ext": { "$ref": "common.schema.json#/$defs/ext" }
+  },
+  "$defs": {
+    "tags": {
+      "description": "Conditions the creative meets, matched against required_elements[].when (e.g. offer). An empty list says none apply; omitting it says unknown.",
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "file": {
+      "type": "object",
+      "required": ["file", "media_type", "targets"],
+      "properties": {
+        "file": { "type": "string", "minLength": 1, "description": "Path relative to the manifest." },
+        "sha256": { "type": "string" },
+        "media_type": { "$ref": "common.schema.json#/$defs/media_type" },
+        "pixels": { "$ref": "common.schema.json#/$defs/pixels" },
+        "bytes": { "type": "integer", "minimum": 0 },
+        "duration_s": { "type": "number", "minimum": 0 },
+        "max_flash_hz": { "type": "number", "minimum": 0, "description": "Highest flash rate in the file, as measured by the creative tool." },
+        "targets": { "type": "array", "minItems": 1, "items": { "$ref": "common.schema.json#/$defs/global_ref" } },
+        "variant": {
+          "type": "object",
+          "required": ["dimension", "value"],
+          "properties": {
+            "dimension": { "type": "string" },
+            "value": { "type": "string" }
+          }
+        },
+        "tags": { "$ref": "#/$defs/tags" },
+        "elements": { "type": "array", "items": { "$ref": "#/$defs/element" } },
+        "ext": { "$ref": "common.schema.json#/$defs/ext" }
+      }
+    },
+    "element": {
+      "type": "object",
+      "required": ["role"],
+      "properties": {
+        "role": { "type": "string", "minLength": 1, "examples": ["headline", "subhead", "body", "cta", "legal", "logo", "background"] },
+        "text": { "type": "string" },
+        "rect_px": { "$ref": "common.schema.json#/$defs/rect_px" },
+        "cap_height_px": { "type": "number", "exclusiveMinimum": 0 },
+        "lang": { "type": "string" },
+        "ext": { "$ref": "common.schema.json#/$defs/ext" }
+      }
+    }
+  }
+}

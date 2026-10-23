@@ -1,0 +1,19 @@
+{
+  "id": "full-still-not-motion",
+  "level": "full",
+  "spec": "Validation (a rule that doesn't apply isn't reported)",
+  "description": "A still image isn't checked against the slot length or the flash limit, even when the manifest gives it a duration.",
+  "now": "2026-10-22T12:00:00+11:00",
+  "specs": [
+    "screens.json"
+  ],
+  "creative": "creative.json",
+  "expect": [
+    {
+      "file": "a.png",
+      "target": "conf.example/n/screen/S1",
+      "result": "pass",
+      "checks": []
+    }
+  ]
+}

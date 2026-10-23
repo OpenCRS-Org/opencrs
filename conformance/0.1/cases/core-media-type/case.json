@@ -1,0 +1,24 @@
+{
+  "id": "core-media-type",
+  "level": "core",
+  "spec": "Standard check codes: CRS-MEDIA-TYPE",
+  "description": "image/webp isn't in the format's accepted types.",
+  "now": "2026-10-22T12:00:00+11:00",
+  "specs": [
+    "screens.json"
+  ],
+  "creative": "creative.json",
+  "expect": [
+    {
+      "file": "a.webp",
+      "target": "conf.example/n/f",
+      "result": "fail",
+      "checks": [
+        {
+          "code": "CRS-MEDIA-TYPE",
+          "severity": "error"
+        }
+      ]
+    }
+  ]
+}

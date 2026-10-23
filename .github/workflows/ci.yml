@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "Run gofmt -w on:"; echo "$unformatted"; exit 1
+          fi
+      - name: go vet
+        run: go vet .
+      - name: go test
+        run: go test -race .
+
+  # The Rust core. rust-toolchain.toml pins the toolchain.
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable (a branch)
+        with:
+          toolchain: "1.95" # keep in step with rust-toolchain.toml
+      - name: cargo fmt
+        run: cargo fmt --check
+      - name: cargo clippy
+        run: cargo clippy --all-targets -- -D warnings
+      # Includes the spec examples: every JSON example in the spec must pass
+      # its schema, and the complete example must match examples/.
+      - name: cargo test
+        run: cargo test --workspace
+      - name: Conformance suite
+        run: cargo run -p opencrs-cli -- conformance
+      - name: Validate examples with the CLI
+        run: cargo run -p opencrs-cli -- schema examples/harbourline/*.json examples/harbourline/.well-known/opencrs.json examples/starter/*.json
+
+  # Windows is a shipped target: the CLI's tests and the core's file
+  # handling (the fs feature) run there too.
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable (a branch)
+        with:
+          toolchain: "1.95" # keep in step with rust-toolchain.toml
+      - name: CLI tests
+        run: cargo test -p opencrs-cli
+      - name: Core tests with file access
+        run: cargo test -p opencrs --features fs
+
+  # Every commit in a pull request must carry a DCO sign-off (CONTRIBUTING.md).
+  dco:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Every commit is signed off
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          missing=0
+          for c in $(git rev-list "$BASE..$HEAD"); do
+            if ! git show -s --format=%B "$c" | grep -q '^Signed-off-by: '; then
+              echo "::error::Commit $(git show -s --format='%h %s' "$c") has no Signed-off-by line. See CONTRIBUTING.md."
+              missing=1
+            fi
+          done
+          exit $missing

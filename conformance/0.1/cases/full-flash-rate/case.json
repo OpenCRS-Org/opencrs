@@ -1,0 +1,41 @@
+{
+  "id": "full-flash-rate",
+  "level": "full",
+  "spec": "Results (flash rate); CRS-MOTION",
+  "description": "The flash limit is 3 Hz: an unmeasured video is not checked, 5 Hz fails, 2 Hz passes.",
+  "now": "2026-10-22T12:00:00+11:00",
+  "specs": [
+    "screens.json"
+  ],
+  "creative": "creative.json",
+  "expect": [
+    {
+      "file": "unmeasured.mp4",
+      "target": "conf.example/n/screen/S1",
+      "result": "incomplete",
+      "checks": [
+        {
+          "code": "CRS-MOTION",
+          "severity": "not_checked"
+        }
+      ]
+    },
+    {
+      "file": "fast.mp4",
+      "target": "conf.example/n/screen/S1",
+      "result": "fail",
+      "checks": [
+        {
+          "code": "CRS-MOTION",
+          "severity": "error"
+        }
+      ]
+    },
+    {
+      "file": "slow.mp4",
+      "target": "conf.example/n/screen/S1",
+      "result": "pass",
+      "checks": []
+    }
+  ]
+}

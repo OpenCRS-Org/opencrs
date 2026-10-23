@@ -1,0 +1,19 @@
+{
+  "id": "core-forward-compatible",
+  "level": "core",
+  "spec": "Versioning: a 0.1 reader reads later 0.x documents, ignoring what it doesn't know",
+  "description": "0.2 documents with fields a 0.1 validator doesn't know, and extensions, are read and checked normally.",
+  "now": "2026-10-22T12:00:00+11:00",
+  "specs": [
+    "screens.json"
+  ],
+  "creative": "creative.json",
+  "expect": [
+    {
+      "file": "a.jpg",
+      "target": "conf.example/n/f",
+      "result": "pass",
+      "checks": []
+    }
+  ]
+}

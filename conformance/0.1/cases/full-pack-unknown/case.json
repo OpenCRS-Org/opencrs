@@ -1,0 +1,28 @@
+{
+  "id": "full-pack-unknown",
+  "level": "full",
+  "spec": "Regulatory rule packs: how a validator evaluates packs (unknown packs)",
+  "description": "A pack the validator doesn't know is reported not checked under CRS-RULE-PACK; everything else is still evaluated.",
+  "now": "2026-10-22T12:00:00+11:00",
+  "specs": [
+    "screens.json"
+  ],
+  "creative": "creative.json",
+  "expect": [
+    {
+      "file": "a.png",
+      "target": "conf.example/road/screen/R1",
+      "result": "fail",
+      "checks": [
+        {
+          "code": "CRS-RULE-PACK",
+          "severity": "not_checked"
+        },
+        {
+          "code": "CRS-PIXELS",
+          "severity": "error"
+        }
+      ]
+    }
+  ]
+}

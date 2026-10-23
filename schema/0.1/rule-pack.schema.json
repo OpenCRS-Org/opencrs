@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://opencrs.dev/schema/0.1/rule-pack.schema.json",
+  "title": "OpenCRS 0.1 regulatory rule pack",
+  "description": "A shared, versioned encoding of published rules (e.g. a state's roadside signage guidelines), referenced from a RuleSet as <name>@<version>.",
+  "type": "object",
+  "required": ["rule_pack", "version", "source_url"],
+  "properties": {
+    "rule_pack": { "type": "string", "pattern": "^[a-z0-9-]+$", "description": "<country>-<region>-<source>, e.g. au-nsw-transport-corridor." },
+    "version": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$", "description": "The source document's edition, as YYYY-MM." },
+    "title": { "type": "string" },
+    "source_title": { "type": "string", "description": "The source document's title, publisher and date." },
+    "source_url": { "type": "string", "pattern": "^https?://" },
+    "status": {
+      "description": "unverified: taken from a summary or extract, not checked against the primary source. draft: every value checked against the primary source by the maintainer. reviewed: also independently reviewed, e.g. by the regulator or the OMA. A pack without a status is unverified.",
+      "enum": ["unverified", "draft", "reviewed"],
+      "default": "unverified"
+    },
+    "status_note": { "type": "string", "description": "What was checked, against what, and when." },
+    "citations": {
+      "description": "Where each encoded rule comes from in the source, keyed by its path in the pack, e.g. playback.min_dwell_s.",
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "notes": { "type": "array", "items": { "type": "string" }, "description": "What the pack leaves out, and anything a reader of the source should know." },
+    "creative": {
+      "description": "Rules checked when creative is validated.",
+      "type": "object",
+      "properties": {
+        "motion": {
+          "type": "object",
+          "properties": {
+            "allowed": { "type": "boolean" },
+            "no_flashing": { "type": "boolean" }
+          }
+        },
+        "no_traffic_device_imagery": { "type": "boolean" },
+        "max_words_at_glance": { "type": "boolean" },
+        "no_sequencing": { "type": "boolean" },
+        "no_device_interaction": { "type": "boolean" }
+      }
+    },
+    "playback": {
+      "description": "Rules the screen platform enforces. Validators report them as info.",
+      "type": "object",
+      "properties": {
+        "min_dwell_s": {
+          "description": "A number, or bands chosen by the screen's placement.speed_kmh: a band applies from speed_kmh_from (inclusive) to speed_kmh_below (exclusive), and the first matching band wins.",
+          "oneOf": [
+            { "type": "number", "minimum": 0 },
+            {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["value"],
+                "properties": {
+                  "speed_kmh_below": { "type": "number" },
+                  "speed_kmh_from": { "type": "number" },
+                  "value": { "type": "number", "minimum": 0 },
+                  "note": { "type": "string" }
+                }
+              }
+            }
+          ]
+        },
+        "max_transition_s": { "type": "number", "minimum": 0 },
+        "failure_state": { "type": "string", "description": "What the sign shows if the image or system fails: black (a black screen), blank (a blank screen of unstated colour), or the source's own words.", "examples": ["black", "blank"] },
+        "school_zone": { "type": "string", "examples": ["fixed_display_during_hours"] },
+        "max_luminance_cd_m2": {
+          "description": "Maximum luminance by lighting period (day, twilight, night), then by the screen's placement.luminance_zone, with default for any zone. null means no limit.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": { "type": ["number", "null"], "minimum": 0 }
+          }
+        }
+      }
+    },
+    "ext": { "$ref": "common.schema.json#/$defs/ext" }
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "opencrs": "0.1",
+  "campaign": {
+    "id": "conformance",
+    "advertiser": "Example Cafe",
+    "category": "IAB8",
+    "tags": [
+      "offer"
+    ]
+  },
+  "files": [
+    {
+      "file": "landscape.jpg",
+      "media_type": "image/jpeg",
+      "pixels": [
+        1920,
+        1080
+      ],
+      "bytes": 1000000,
+      "targets": [
+        "conf.example/n/f"
+      ]
+    },
+    {
+      "file": "portrait.jpg",
+      "media_type": "image/jpeg",
+      "pixels": [
+        1080,
+        1920
+      ],
+      "bytes": 1000000,
+      "targets": [
+        "conf.example/n/f"
+      ]
+    }
+  ]
+}

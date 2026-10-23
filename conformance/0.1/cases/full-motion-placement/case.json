@@ -1,0 +1,24 @@
+{
+  "id": "full-motion-placement",
+  "level": "full",
+  "spec": "Field reference: placement.motion_allowed; CRS-MOTION",
+  "description": "A video on a screen whose placement doesn't allow motion fails.",
+  "now": "2026-10-22T12:00:00+11:00",
+  "specs": [
+    "screens.json"
+  ],
+  "creative": "creative.json",
+  "expect": [
+    {
+      "file": "a.mp4",
+      "target": "conf.example/n/screen/S1",
+      "result": "fail",
+      "checks": [
+        {
+          "code": "CRS-MOTION",
+          "severity": "error"
+        }
+      ]
+    }
+  ]
+}

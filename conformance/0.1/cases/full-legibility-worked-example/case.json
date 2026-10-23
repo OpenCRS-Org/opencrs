@@ -1,0 +1,25 @@
+{
+  "id": "full-legibility-worked-example",
+  "level": "full",
+  "spec": "Legibility: worked example; Results (warning margin 1.25)",
+  "description": "The spec's worked example: on S1 legal text needs 16 px; 18 px passes, but below 1.25 x 16 = 20 px, so it warns.",
+  "now": "2026-10-22T12:00:00+11:00",
+  "specs": [
+    "screens.json"
+  ],
+  "creative": "creative.json",
+  "expect": [
+    {
+      "file": "a.png",
+      "target": "conf.example/n/screen/S1",
+      "result": "warn",
+      "checks": [
+        {
+          "code": "CRS-LEGIBILITY",
+          "severity": "warning",
+          "element": "legal"
+        }
+      ]
+    }
+  ]
+}

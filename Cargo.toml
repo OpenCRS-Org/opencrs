@@ -1,0 +1,14 @@
+[workspace]
+members = ["crates/*", "bindings/*"]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+license = "Apache-2.0"
+repository = "https://github.com/OpenCRS-Org/opencrs"
+homepage = "https://opencrs.dev"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"

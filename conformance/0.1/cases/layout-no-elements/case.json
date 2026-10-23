@@ -1,0 +1,32 @@
+{
+  "id": "layout-no-elements",
+  "level": "layout",
+  "spec": "Validation (not_checked means a rule exists but data is missing)",
+  "description": "Without element positions, safe-area and blocked-region rules can't be checked. S3 has no blocked regions left, so that rule doesn't apply to it at all.",
+  "now": "2026-10-22T12:00:00+11:00",
+  "specs": [
+    "screens.json"
+  ],
+  "creative": "creative.json",
+  "expect": [
+    {
+      "file": "a.png",
+      "target": "conf.example/n/f",
+      "result": "incomplete",
+      "checks": [
+        {
+          "code": "CRS-SAFE-AREA",
+          "severity": "not_checked"
+        },
+        {
+          "code": "CRS-BLOCKED-REGION",
+          "severity": "not_checked",
+          "screens": [
+            "S1",
+            "S2"
+          ]
+        }
+      ]
+    }
+  ]
+}

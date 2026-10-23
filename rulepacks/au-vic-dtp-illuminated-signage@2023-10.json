@@ -1,0 +1,30 @@
+{
+  "rule_pack": "au-vic-dtp-illuminated-signage",
+  "version": "2023-10",
+  "title": "Victorian luminance limits for illuminated signs referred to the Head, Transport for Victoria",
+  "source_title": "Requirements and Guidelines for Illuminated Outdoor Advertising Signage, version 3, 4 October 2023 (Victorian Department of Transport and Planning)",
+  "source_url": "https://www.vic.gov.au/sites/default/files/2023-10/DTP-Requirements-and-Guidelines-for-Illuminated-Outdoor-Advertising-Signage.pdf",
+  "status": "draft",
+  "status_note": "Every value checked against the DTP document on 22 October 2026 (page citations below), downloaded from the source URL, and Victoria Planning Provisions clause 52.05 read as published on 22 October 2026 (VPP amendment VC319); not yet independently reviewed",
+  "citations": {
+    "playback.max_luminance_cd_m2": "DTP document p. 4, lighting criteria table (sign categories p. 3, district brightness areas p. 5)"
+  },
+  "notes": [
+    "Page numbers are the DTP document's printed page numbers. It applies to illuminated signs referred to the Head, Transport for Victoria: under VPP clause 52.05-3 (VC148, 31 July 2018), an application for an animated or electronic sign within 60 m of a freeway or arterial road declared under the Road Management Act 2004 (DTP document pp. 2-3). For other signs the council's permit decides.",
+    "Clause 52.05 was read through the planning schemes portal's data service (https://api.app.planning.vic.gov.au/planning/v2/ordinance/scheme/vpp/52.05), which serves the text shown at https://planning-schemes.app.planning.vic.gov.au/VPP/clauses/52.05. Sub-clauses read: 52.05-2 (VC274, 28 February 2025), 52.05-3 (VC148), 52.05-6 (VC205, 20 January 2022) and 52.05-8 (VC148).",
+    "There is no statewide dwell time. Clause 52.05-6 requires an application for a sign of 18 m² or more to state 'the dwell and change time for any non-static images', and the DTP document asks for dwell in the lighting impact assessment (p. 6), but neither sets a value: dwell is a condition of each permit. Record it on the screen as rules.playback.min_dwell_s.",
+    "Luminance depends on the sign's category as well as the site. Category A is a high wall, major promotion, panel, pole or sky sign, or a promotion sign over 3 m²; category B is a promotion sign of up to 3 m², such as a bus or tram shelter, phone booth or screen behind a shop window (p. 3). Night limits depend on district brightness (p. 5): high is town centres, CBDs and other commercial or industrial areas with street lighting (AS 4282 zone A4); medium is residential and suburban areas not next to commercial areas (A3); low is sparsely inhabited rural and semi-rural areas and unlit roads (A2). The zone keys combine the two: set placement.luminance_zone to cat_a_high, cat_a_medium, cat_a_low, cat_b_high, cat_b_medium or cat_b_low.",
+    "Day is 6,000 cd/m² for category A and 4,000 for B; morning and evening twilight and overcast weather 700 and 400; night 350, 250 and 150 for category A in high, medium and low district brightness, and 200, 150 and 'not permitted' for category B, encoded as 0. Full sun on the face of the sign has no limit. Night begins when the sun is 18° below the horizon (p. 4, note 2). Each night-time limit also has a threshold increment limit (20% for A, 15% for B, at adaptation luminances of 5, 1 and 0.25 cd/m²), which needs a lighting calculation and isn't encoded.",
+    "Not encoded: transitions of 0.1 s or less (p. 8, condition 3), dimming and photocell control, compliance records and upward light ratio (pp. 8-10). The DTP document lists these as standard permit conditions that 'may be required', considered separately for each permit.",
+    "Not encoded: the road-safety decision guidelines of clause 52.05-8, such as a sign that 'is likely to be mistaken for a traffic control device' or 'could mislead drivers or be mistaken as an instruction to drivers'. They are matters the responsible authority must consider when deciding a permit, not rules a creative must meet. Animated signs can be permitted, so motion isn't restricted either.",
+    "No separate Department of Transport and Planning guidance on digital signs was found: its page on animated and electronic signage (https://www.vic.gov.au/animated-and-electronic-signage, updated 23 March 2026) links only to this document and lists the factors referrals consider.",
+    "Discrepancies with the OMA Digital Signage Policy (February 2024), whose Victorian pack this replaces: the OMA's Table 1 gives a statewide 30 s dwell, which neither clause 52.05 nor the DTP document contains; and its Table 2 lists a night-time 'Category - 200' row for high district brightness, which the DTP document shows is category B. The OMA's other luminance figures match."
+  ],
+  "playback": {
+    "max_luminance_cd_m2": {
+      "day": { "cat_a_high": 6000, "cat_a_medium": 6000, "cat_a_low": 6000, "cat_b_high": 4000, "cat_b_medium": 4000, "cat_b_low": 4000 },
+      "twilight": { "cat_a_high": 700, "cat_a_medium": 700, "cat_a_low": 700, "cat_b_high": 400, "cat_b_medium": 400, "cat_b_low": 400 },
+      "night": { "cat_a_high": 350, "cat_a_medium": 250, "cat_a_low": 150, "cat_b_high": 200, "cat_b_medium": 150, "cat_b_low": 0 }
+    }
+  }
+}

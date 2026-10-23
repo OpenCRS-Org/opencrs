@@ -1,0 +1,28 @@
+{
+  "id": "core-file-wins",
+  "level": "core",
+  "spec": "Creative manifest: the file wins over the manifest",
+  "description": "The file is 32 x 32 although the manifest says 1920 x 1080: the file's size is checked, and the disagreement is a warning.",
+  "now": "2026-10-22T12:00:00+11:00",
+  "specs": [
+    "screens.json"
+  ],
+  "creative": "creative.json",
+  "expect": [
+    {
+      "file": "small.png",
+      "target": "conf.example/n/f",
+      "result": "fail",
+      "checks": [
+        {
+          "code": "CRS-PIXELS",
+          "severity": "error"
+        },
+        {
+          "code": "CRS-MANIFEST-MISMATCH",
+          "severity": "warning"
+        }
+      ]
+    }
+  ]
+}

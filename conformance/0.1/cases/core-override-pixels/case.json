@@ -1,0 +1,41 @@
+{
+  "id": "core-override-pixels",
+  "level": "core",
+  "spec": "Inheritance: specs follow the most specific level (screen overrides)",
+  "description": "S2 overrides the format's 1920 x 1080 canvas with 1080 x 1920, so each canvas fails on the other screen.",
+  "now": "2026-10-22T12:00:00+11:00",
+  "specs": [
+    "screens.json"
+  ],
+  "creative": "creative.json",
+  "expect": [
+    {
+      "file": "landscape.jpg",
+      "target": "conf.example/n/f",
+      "result": "fail",
+      "checks": [
+        {
+          "code": "CRS-PIXELS",
+          "severity": "error",
+          "screens": [
+            "S2"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "portrait.jpg",
+      "target": "conf.example/n/f",
+      "result": "fail",
+      "checks": [
+        {
+          "code": "CRS-PIXELS",
+          "severity": "error",
+          "screens": [
+            "S1"
+          ]
+        }
+      ]
+    }
+  ]
+}

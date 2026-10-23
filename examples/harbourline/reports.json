@@ -1,0 +1,113 @@
+[
+  {
+    "opencrs": "0.1",
+    "validator": {
+      "name": "opencrs",
+      "version": "0.1"
+    },
+    "file": "lunch-portrait.png",
+    "file_sha256": "4d11af64d6e4c59e7260ebd1501b942fff89164c5481d89992dd14abfebb90a4",
+    "target": "harbourline.example/retail/portrait-totem-75",
+    "spec_updated_at": "2026-10-20T09:00:00+11:00",
+    "checked_at": "2026-10-22T12:00:00+11:00",
+    "result": "fail",
+    "checks": [
+      {
+        "code": "CRS-LEGIBILITY",
+        "severity": "warning",
+        "message": "Legal text is 18 px; 16 px minimum at 2 m, ratio 150. Passes with little margin",
+        "rect_px": [
+          90,
+          1640,
+          520,
+          40
+        ],
+        "element": "legal",
+        "screens": [
+          "HC-L1-001"
+        ]
+      },
+      {
+        "code": "CRS-LEGIBILITY",
+        "severity": "warning",
+        "message": "Headline text is 92 px; 77 px minimum at 10 m, ratio 150. Passes with little margin",
+        "rect_px": [
+          90,
+          210,
+          700,
+          260
+        ],
+        "element": "headline",
+        "screens": [
+          "HC-L1-002"
+        ]
+      },
+      {
+        "code": "CRS-LEGIBILITY",
+        "severity": "error",
+        "message": "Legal text is 18 px; 23 px minimum at 3 m, ratio 150",
+        "rect_px": [
+          90,
+          1640,
+          520,
+          40
+        ],
+        "element": "legal",
+        "screens": [
+          "HC-L1-002"
+        ]
+      }
+    ]
+  },
+  {
+    "opencrs": "0.1",
+    "validator": {
+      "name": "opencrs",
+      "version": "0.1"
+    },
+    "file": "lunch-portrait-logo-right.png",
+    "file_sha256": "66e329bd9452fed92dddc05106df8a5ee17dd28faf2c5ac98642ea44dc99e618",
+    "target": "harbourline.example/retail/screen/HC-L1-001",
+    "spec_updated_at": "2026-10-20T09:00:00+11:00",
+    "checked_at": "2026-10-22T12:00:00+11:00",
+    "result": "fail",
+    "checks": [
+      {
+        "code": "CRS-SAFE-AREA",
+        "severity": "error",
+        "message": "Logo extends into the safe-area margin (top 120 px)",
+        "rect_px": [
+          820,
+          100,
+          200,
+          60
+        ],
+        "element": "logo"
+      },
+      {
+        "code": "CRS-BLOCKED-REGION",
+        "severity": "error",
+        "message": "Logo overlaps the network-logo area",
+        "rect_px": [
+          880,
+          40,
+          160,
+          80
+        ],
+        "element": "logo"
+      },
+      {
+        "code": "CRS-LEGIBILITY",
+        "severity": "warning",
+        "message": "Legal text is 18 px; 16 px minimum at 2 m, ratio 150. Passes with little margin",
+        "rect_px": [
+          90,
+          1640,
+          520,
+          40
+        ],
+        "element": "legal"
+      }
+    ]
+  }
+]

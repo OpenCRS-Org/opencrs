@@ -1,0 +1,41 @@
+{
+  "id": "full-required-conditional",
+  "level": "full",
+  "spec": "Creative manifest: tags; Standard check codes: CRS-REQUIRED-ELEMENT",
+  "description": "Legal text is required on offer creative: missing it fails when tagged offer, isn't required when tags say none apply, and is not checked when tags are unknown.",
+  "now": "2026-10-22T12:00:00+11:00",
+  "specs": [
+    "screens.json"
+  ],
+  "creative": "creative.json",
+  "expect": [
+    {
+      "file": "offer.png",
+      "target": "conf.example/n/screen/S1",
+      "result": "fail",
+      "checks": [
+        {
+          "code": "CRS-REQUIRED-ELEMENT",
+          "severity": "error"
+        }
+      ]
+    },
+    {
+      "file": "none.png",
+      "target": "conf.example/n/screen/S1",
+      "result": "pass",
+      "checks": []
+    },
+    {
+      "file": "unknown.png",
+      "target": "conf.example/n/screen/S1",
+      "result": "incomplete",
+      "checks": [
+        {
+          "code": "CRS-REQUIRED-ELEMENT",
+          "severity": "not_checked"
+        }
+      ]
+    }
+  ]
+}

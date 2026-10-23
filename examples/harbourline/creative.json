@@ -1,0 +1,29 @@
+{
+  "opencrs": "0.1",
+  "campaign": { "id": "larkspur-lunch-nov", "advertiser": "Larkspur Cafe", "category": "IAB8", "tags": ["offer"] },
+  "files": [
+    {
+      "file": "lunch-portrait.png",
+      "media_type": "image/png",
+      "pixels": [1080, 1920],
+      "targets": ["harbourline.example/retail/portrait-totem-75"],
+      "variant": { "dimension": "weather", "value": "rain" },
+      "elements": [
+        { "role": "headline", "text": "Lunch specials.", "rect_px": [90, 210, 700, 260], "cap_height_px": 92 },
+        { "role": "legal", "text": "Weekdays 11:30 to 2:30", "rect_px": [90, 1640, 520, 40], "cap_height_px": 18 },
+        { "role": "logo", "rect_px": [90, 160, 260, 60] }
+      ]
+    },
+    {
+      "file": "lunch-portrait-logo-right.png",
+      "media_type": "image/png",
+      "pixels": [1080, 1920],
+      "targets": ["harbourline.example/retail/screen/HC-L1-001"],
+      "elements": [
+        { "role": "headline", "text": "Lunch specials.", "rect_px": [90, 210, 700, 260], "cap_height_px": 92 },
+        { "role": "legal", "text": "Weekdays 11:30 to 2:30", "rect_px": [90, 1640, 520, 40], "cap_height_px": 18 },
+        { "role": "logo", "rect_px": [820, 100, 200, 60] }
+      ]
+    }
+  ]
+}

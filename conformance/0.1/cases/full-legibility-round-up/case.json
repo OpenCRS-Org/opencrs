@@ -1,0 +1,25 @@
+{
+  "id": "full-legibility-round-up",
+  "level": "full",
+  "spec": "Legibility: minimum sizes round up",
+  "description": "The legal minimum is 15.3 px, which rounds up to 16, so 15 px fails. Rounding to the nearest pixel would wrongly pass it.",
+  "now": "2026-10-22T12:00:00+11:00",
+  "specs": [
+    "screens.json"
+  ],
+  "creative": "creative.json",
+  "expect": [
+    {
+      "file": "a.png",
+      "target": "conf.example/n/screen/S1",
+      "result": "fail",
+      "checks": [
+        {
+          "code": "CRS-LEGIBILITY",
+          "severity": "error",
+          "element": "legal"
+        }
+      ]
+    }
+  ]
+}

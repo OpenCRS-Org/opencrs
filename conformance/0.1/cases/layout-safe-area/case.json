@@ -1,0 +1,25 @@
+{
+  "id": "layout-safe-area",
+  "level": "layout",
+  "spec": "Standard check codes: CRS-SAFE-AREA",
+  "description": "A logo 30 px from the left edge enters the 60 px margin on every screen.",
+  "now": "2026-10-22T12:00:00+11:00",
+  "specs": [
+    "screens.json"
+  ],
+  "creative": "creative.json",
+  "expect": [
+    {
+      "file": "a.png",
+      "target": "conf.example/n/f",
+      "result": "fail",
+      "checks": [
+        {
+          "code": "CRS-SAFE-AREA",
+          "severity": "error",
+          "element": "logo"
+        }
+      ]
+    }
+  ]
+}

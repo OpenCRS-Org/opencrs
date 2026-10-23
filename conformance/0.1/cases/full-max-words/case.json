@@ -1,0 +1,24 @@
+{
+  "id": "full-max-words",
+  "level": "full",
+  "spec": "Legibility: reading time (dwell x 2 words per second)",
+  "description": "S1's 4 s dwell allows 8 words; a 10-word headline fails.",
+  "now": "2026-10-22T12:00:00+11:00",
+  "specs": [
+    "screens.json"
+  ],
+  "creative": "creative.json",
+  "expect": [
+    {
+      "file": "a.png",
+      "target": "conf.example/n/screen/S1",
+      "result": "fail",
+      "checks": [
+        {
+          "code": "CRS-MAX-WORDS",
+          "severity": "error"
+        }
+      ]
+    }
+  ]
+}

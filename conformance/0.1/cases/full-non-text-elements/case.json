@@ -1,0 +1,19 @@
+{
+  "id": "full-non-text-elements",
+  "level": "full",
+  "spec": "Legibility: which roles are text",
+  "description": "Logos and images aren't text, so their size isn't checked against the legibility minimum.",
+  "now": "2026-10-22T12:00:00+11:00",
+  "specs": [
+    "screens.json"
+  ],
+  "creative": "creative.json",
+  "expect": [
+    {
+      "file": "a.png",
+      "target": "conf.example/n/screen/S1",
+      "result": "pass",
+      "checks": []
+    }
+  ]
+}

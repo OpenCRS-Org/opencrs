@@ -1,0 +1,77 @@
+{
+  "id": "full-pack-glance-text",
+  "level": "full",
+  "spec": "Regulatory rule packs: reading at a glance (CRS-GLANCE-TEXT), worked example; CRS-PLAYBACK",
+  "description": "At 80 km/h from 20-150 m a driver can read 4 words, with text at least 43 px here: 3 words at 60 px pass, 5 words fail, 40 px fails, 50 px passes with little margin. Playback limits are reported as info.",
+  "now": "2026-10-22T12:00:00+11:00",
+  "specs": [
+    "screens.json"
+  ],
+  "creative": "creative.json",
+  "expect": [
+    {
+      "file": "ok.png",
+      "target": "conf.example/road/screen/R1",
+      "result": "incomplete",
+      "checks": [
+        {
+          "code": "CRS-TRAFFIC-DEVICE",
+          "severity": "not_checked"
+        },
+        {
+          "code": "CRS-SEQUENCING",
+          "severity": "info"
+        },
+        {
+          "code": "CRS-PLAYBACK",
+          "severity": "info"
+        }
+      ]
+    },
+    {
+      "file": "wordy.png",
+      "target": "conf.example/road/screen/R1",
+      "result": "fail",
+      "checks": [
+        {
+          "code": "CRS-GLANCE-TEXT",
+          "severity": "error"
+        },
+        {
+          "code": "CRS-TRAFFIC-DEVICE",
+          "severity": "not_checked"
+        }
+      ]
+    },
+    {
+      "file": "small.png",
+      "target": "conf.example/road/screen/R1",
+      "result": "fail",
+      "checks": [
+        {
+          "code": "CRS-GLANCE-TEXT",
+          "severity": "error"
+        },
+        {
+          "code": "CRS-TRAFFIC-DEVICE",
+          "severity": "not_checked"
+        }
+      ]
+    },
+    {
+      "file": "close.png",
+      "target": "conf.example/road/screen/R1",
+      "result": "incomplete",
+      "checks": [
+        {
+          "code": "CRS-GLANCE-TEXT",
+          "severity": "warning"
+        },
+        {
+          "code": "CRS-TRAFFIC-DEVICE",
+          "severity": "not_checked"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://opencrs.dev/schema/0.1/common.schema.json",
+  "title": "OpenCRS 0.1 shared definitions",
+  "$defs": {
+    "version": {
+      "description": "Spec version as major.minor. A 0.1 reader accepts any 0.x document and ignores fields it doesn't know.",
+      "type": "string",
+      "pattern": "^0\\.[0-9]+$"
+    },
+    "ext": {
+      "description": "Extensions, keyed by the extender's domain, e.g. {\"cms-a.example\": {...}}.",
+      "type": "object",
+      "propertyNames": { "pattern": "^[a-z0-9.-]+\\.[a-z]{2,}$" },
+      "additionalProperties": { "type": "object" }
+    },
+    "id": {
+      "description": "Stable identifier, unique within its parent. Case-sensitive and matched exactly: hc-l1-001 and HC-L1-001 are different ids.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+      "maxLength": 128
+    },
+    "domain": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]+(\\.[a-z0-9-]+)+$"
+    },
+    "datetime": {
+      "description": "ISO 8601 date-time with a time zone offset or Z.",
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:[0-9]{2}(\\.[0-9]+)?)?(Z|[+-][0-9]{2}:[0-9]{2})$"
+    },
+    "pixels": {
+      "description": "[width, height] in pixels.",
+      "type": "array",
+      "prefixItems": [
+        { "type": "integer", "minimum": 1 },
+        { "type": "integer", "minimum": 1 }
+      ],
+      "items": false,
+      "minItems": 2
+    },
+    "size_mm": {
+      "description": "[width, height] in millimetres.",
+      "type": "array",
+      "prefixItems": [
+        { "type": "number", "exclusiveMinimum": 0 },
+        { "type": "number", "exclusiveMinimum": 0 }
+      ],
+      "items": false,
+      "minItems": 2
+    },
+    "rect_px": {
+      "description": "[x, y, width, height] in pixels, origin top-left of the canvas (or of the segment when inside one).",
+      "type": "array",
+      "prefixItems": [
+        { "type": "integer" },
+        { "type": "integer" },
+        { "type": "integer", "minimum": 0 },
+        { "type": "integer", "minimum": 0 }
+      ],
+      "items": false,
+      "minItems": 4
+    },
+    "insets": {
+      "description": "Margins in pixels.",
+      "type": "object",
+      "properties": {
+        "top": { "type": "integer", "minimum": 0 },
+        "right": { "type": "integer", "minimum": 0 },
+        "bottom": { "type": "integer", "minimum": 0 },
+        "left": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "range_m": {
+      "description": "[min, max] distance in metres.",
+      "type": "array",
+      "prefixItems": [
+        { "type": "number", "minimum": 0 },
+        { "type": "number", "minimum": 0 }
+      ],
+      "items": false,
+      "minItems": 2
+    },
+    "media_type": {
+      "description": "IANA media type, e.g. image/jpeg.",
+      "type": "string",
+      "pattern": "^[a-z]+/[A-Za-z0-9.+-]+$"
+    },
+    "iab_category": {
+      "description": "IAB content category code, e.g. IAB8 or IAB7-5.",
+      "type": "string",
+      "pattern": "^IAB[0-9]+(-[0-9]+)?$"
+    },
+    "global_ref": {
+      "description": "Global reference: <publisher>/<network>/<format-id> for a format, or <publisher>/<network>/screen/<screen-id> for a screen.",
+      "type": "string",
+      "pattern": "^[a-z0-9-]+(\\.[a-z0-9-]+)+/[A-Za-z0-9._-]+/([A-Za-z0-9._-]+|screen/[A-Za-z0-9._-]+)$"
+    },
+    "rule_pack_ref": {
+      "description": "Rule pack reference as <name>@<version>.",
+      "type": "string",
+      "pattern": "^[a-z0-9-]+@[A-Za-z0-9._-]+$"
+    },
+    "check_code": {
+      "type": "string",
+      "pattern": "^CRS-[A-Z0-9-]+$"
+    }
+  }
+}

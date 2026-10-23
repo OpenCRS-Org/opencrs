@@ -1,0 +1,8 @@
+{
+  "$schema": "https://opencrs.dev/schema/0.1/index.schema.json",
+  "opencrs": "0.1",
+  "publisher": { "id": "your-domain.example", "name": "Your Screens", "contact": "specs@your-domain.example" },
+  "documents": [
+    { "url": "https://your-domain.example/opencrs/screens.json", "network": "main", "visibility": "public" }
+  ]
+}

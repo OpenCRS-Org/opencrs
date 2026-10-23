@@ -1,0 +1,7 @@
+{
+  "opencrs": "0.1",
+  "publisher": { "id": "harbourline.example", "name": "Harbourline", "contact": "specs@harbourline.example" },
+  "documents": [
+    { "url": "https://harbourline.example/opencrs/retail.screens.json", "network": "retail", "visibility": "public" }
+  ]
+}

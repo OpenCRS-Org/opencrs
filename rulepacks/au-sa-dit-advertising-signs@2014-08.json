@@ -1,0 +1,44 @@
+{
+  "rule_pack": "au-sa-dit-advertising-signs",
+  "version": "2014-08",
+  "title": "South Australian electronic signs visible from arterial roads",
+  "source_title": "Advertising Signs Assessment Guidelines for Road Safety, August 2014 (South Australian Department of Planning, Transport and Infrastructure, now the Department for Infrastructure and Transport)",
+  "source_url": "https://dit.sa.gov.au/__data/assets/pdf_file/0007/172645/DIT-Advertising-Signs-Assessment-Guidelines.pdf",
+  "status": "draft",
+  "status_note": "Every value checked against the guidelines on 22 October 2026 (page citations below). The source URL refuses automated downloads; the copy checked was the web.archive.org capture of 8 December 2025, identical to the captures of 2023 and June 2025. Not yet independently reviewed",
+  "citations": {
+    "creative.motion.allowed": "p. 12, checklist item 11; p. 24, Appendix 5, Movement (\"should not comprise videos or animations\")",
+    "creative.motion.no_flashing": "p. 24, Appendix 5, Movement",
+    "creative.no_traffic_device_imagery": "p. 12, checklist item 7; pp. 20-21, Appendix 4 (instructions to traffic; symbols and images)",
+    "creative.max_words_at_glance": "pp. 20-21, Appendix 4, Message Type (\"appreciated at a glance\"); p. 24, Appendix 5, Movement (\"easily understood at a glance\")",
+    "creative.no_sequencing": "p. 21, Appendix 4, Content (single self-contained message); p. 24, Appendix 5, Movement (\"Sequential messages should be avoided\")",
+    "playback.min_dwell_s": "p. 24, Appendix 5, Movement; p. 12, checklist item 12",
+    "playback.max_transition_s": "p. 24, Appendix 5, Movement (\"within 0.1 of a second\")",
+    "playback.failure_state": "p. 22, Appendix 5, Luminance and Adaptive Dimming (\"turn the display off or to a blank, black screen\")",
+    "playback.max_luminance_cd_m2": "p. 22, Appendix 5, Table 4 (night row)"
+  },
+  "notes": [
+    "Page numbers are the guidelines' printed page numbers. The Commissioner of Highways applies them to advertisements visible from arterial roads that are referred to the department, and to signs on the Commissioner's land (pp. 4-6).",
+    "No document titled 'Advertising Signs Code of Practice' was found. Search excerpts of the South Australian House of Assembly Hansard of 8 June 2021 (which refused automated access, so wasn't read in full) say the safety assessment of roadside advertising signs is based on the department's Advertising Signs Assessment Guidelines, which is this document. The department's publications page, as captured by web.archive.org in August 2026, no longer lists it, but the file is still at the source URL. The Planning and Design Code's advertisement policies weren't checked.",
+    "How binding: the guidelines are written as 'should', but an electronic sign must meet ('a yes') every item of the additional checklist for electronic signs (p. 12), and checklist item 8 says the criteria of Appendix 5 must be met. This pack encodes Appendices 4 and 5 on that basis.",
+    "Dwell: Appendix 5 says signs should generally be static with few changes a day, and where changing messages are appropriate, 'a minimum dwell time of 45 seconds should be applied with no blank screen between messages. Longer dwell times may be necessary in more complex locations, or in higher speed environments.'",
+    "Transitions must also avoid effects such as fade, zoom or fly-in (p. 24).",
+    "Luminance: Table 4 (p. 22, reproduced in part from AS 4852.1:2009) gives maximums by ambient conditions: 6,300 cd/m² on a sunny day (40,000 lux), 1,100 on a cloudy day (4,000 lux), 300 at twilight (400 lux), 200 at dusk (40 lux), and at night (under 4 lux) the site-specific veiling luminance limit or 200, whichever is lower. Only the night maximum is encoded: the daytime and twilight steps are set by measured ambient light, which lighting periods can't select, and the night limit may be lower once the site's veiling luminance is calculated (p. 24, Table 5). Signs must have an ambient light sensor and at least four steps of dimming.",
+    "Not encoded: one changing sign visible to a driver at a time, billboard spacing (p. 21, Table 3), crash rates, device restriction areas and clearances (Appendices 1-3), which are siting criteria; and content standards (p. 21).",
+    "Discrepancies with the OMA Digital Signage Policy (February 2024), whose South Australian pack this replaces: none in dwell (45 s) or luminance (its Table 2 reproduces Table 4). The OMA treats motion as an industry position, but these guidelines rule out videos and animation."
+  ],
+  "creative": {
+    "motion": { "allowed": false, "no_flashing": true },
+    "no_traffic_device_imagery": true,
+    "max_words_at_glance": true,
+    "no_sequencing": true
+  },
+  "playback": {
+    "min_dwell_s": [ { "value": 45, "note": "longer at complex or high-speed sites" } ],
+    "max_transition_s": 0.1,
+    "failure_state": "black",
+    "max_luminance_cd_m2": {
+      "night": { "default": 200 }
+    }
+  }
+}

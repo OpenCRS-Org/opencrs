@@ -1,0 +1,63 @@
+{
+  "opencrs": "0.1",
+  "campaign": {
+    "id": "conformance",
+    "advertiser": "Example Cafe",
+    "category": "IAB8",
+    "tags": [
+      "offer"
+    ]
+  },
+  "files": [
+    {
+      "file": "clip.mp4",
+      "media_type": "video/mp4",
+      "pixels": [
+        1000,
+        500
+      ],
+      "targets": [
+        "conf.example/road/board"
+      ],
+      "elements": [
+        {
+          "role": "headline",
+          "text": "Fresh lunch daily",
+          "rect_px": [
+            50,
+            50,
+            900,
+            200
+          ],
+          "cap_height_px": 60
+        }
+      ],
+      "duration_s": 10,
+      "max_flash_hz": 0
+    },
+    {
+      "file": "still.png",
+      "media_type": "image/png",
+      "pixels": [
+        1000,
+        500
+      ],
+      "targets": [
+        "conf.example/road/board"
+      ],
+      "elements": [
+        {
+          "role": "headline",
+          "text": "Fresh lunch daily",
+          "rect_px": [
+            50,
+            50,
+            900,
+            200
+          ],
+          "cap_height_px": 60
+        }
+      ]
+    }
+  ]
+}

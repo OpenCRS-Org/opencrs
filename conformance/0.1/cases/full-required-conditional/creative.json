@@ -1,0 +1,116 @@
+{
+  "opencrs": "0.1",
+  "campaign": {
+    "id": "conformance",
+    "advertiser": "Example Cafe",
+    "category": "IAB8"
+  },
+  "files": [
+    {
+      "file": "offer.png",
+      "media_type": "image/png",
+      "pixels": [
+        1080,
+        1920
+      ],
+      "bytes": 2400000,
+      "targets": [
+        "conf.example/n/screen/S1"
+      ],
+      "tags": [
+        "offer"
+      ],
+      "elements": [
+        {
+          "role": "headline",
+          "text": "Lunch specials.",
+          "rect_px": [
+            90,
+            210,
+            700,
+            260
+          ],
+          "cap_height_px": 92
+        },
+        {
+          "role": "logo",
+          "rect_px": [
+            90,
+            130,
+            260,
+            60
+          ]
+        }
+      ]
+    },
+    {
+      "file": "none.png",
+      "media_type": "image/png",
+      "pixels": [
+        1080,
+        1920
+      ],
+      "bytes": 2400000,
+      "targets": [
+        "conf.example/n/screen/S1"
+      ],
+      "tags": [],
+      "elements": [
+        {
+          "role": "headline",
+          "text": "Lunch specials.",
+          "rect_px": [
+            90,
+            210,
+            700,
+            260
+          ],
+          "cap_height_px": 92
+        },
+        {
+          "role": "logo",
+          "rect_px": [
+            90,
+            130,
+            260,
+            60
+          ]
+        }
+      ]
+    },
+    {
+      "file": "unknown.png",
+      "media_type": "image/png",
+      "pixels": [
+        1080,
+        1920
+      ],
+      "bytes": 2400000,
+      "targets": [
+        "conf.example/n/screen/S1"
+      ],
+      "elements": [
+        {
+          "role": "headline",
+          "text": "Lunch specials.",
+          "rect_px": [
+            90,
+            210,
+            700,
+            260
+          ],
+          "cap_height_px": 92
+        },
+        {
+          "role": "logo",
+          "rect_px": [
+            90,
+            130,
+            260,
+            60
+          ]
+        }
+      ]
+    }
+  ]
+}

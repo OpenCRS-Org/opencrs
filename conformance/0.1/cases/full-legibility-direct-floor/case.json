@@ -1,0 +1,47 @@
+{
+  "id": "full-legibility-direct-floor",
+  "level": "full",
+  "spec": "Legibility: a ratio that can't be worked out; direct minimum still applies",
+  "description": "S1 has no viewing distance, so the ratio can't be evaluated, but legal text has a direct 14 mm (17 px) minimum: 16 px fails regardless; 30 px can't be confirmed.",
+  "now": "2026-10-22T12:00:00+11:00",
+  "specs": [
+    "screens.json"
+  ],
+  "creative": "creative.json",
+  "expect": [
+    {
+      "file": "a.png",
+      "target": "conf.example/n/screen/S1",
+      "result": "fail",
+      "checks": [
+        {
+          "code": "CRS-LEGIBILITY",
+          "severity": "error",
+          "element": "legal"
+        },
+        {
+          "code": "CRS-LEGIBILITY",
+          "severity": "not_checked",
+          "element": "headline"
+        }
+      ]
+    },
+    {
+      "file": "b.png",
+      "target": "conf.example/n/screen/S1",
+      "result": "incomplete",
+      "checks": [
+        {
+          "code": "CRS-LEGIBILITY",
+          "severity": "not_checked",
+          "element": "legal"
+        },
+        {
+          "code": "CRS-LEGIBILITY",
+          "severity": "not_checked",
+          "element": "headline"
+        }
+      ]
+    }
+  ]
+}

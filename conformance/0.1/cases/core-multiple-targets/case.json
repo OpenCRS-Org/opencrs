@@ -1,0 +1,25 @@
+{
+  "id": "core-multiple-targets",
+  "level": "core",
+  "spec": "Creative manifest: targets; Validation (one report per file and target)",
+  "description": "One file targeting a format, a screen and another publisher's format gets one report for each of this publisher's targets.",
+  "now": "2026-10-22T12:00:00+11:00",
+  "specs": [
+    "screens.json"
+  ],
+  "creative": "creative.json",
+  "expect": [
+    {
+      "file": "a.jpg",
+      "target": "conf.example/n/f",
+      "result": "pass",
+      "checks": []
+    },
+    {
+      "file": "a.jpg",
+      "target": "conf.example/n/screen/S1",
+      "result": "pass",
+      "checks": []
+    }
+  ]
+}

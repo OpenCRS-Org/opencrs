@@ -1,0 +1,19 @@
+{
+  "id": "core-pass",
+  "level": "core",
+  "spec": "Conformance levels; Validation (a rule that doesn't apply isn't not_checked)",
+  "description": "Creative with text, tags and a category on a Core-level format passes: rules the publisher didn't set aren't reported.",
+  "now": "2026-10-22T12:00:00+11:00",
+  "specs": [
+    "screens.json"
+  ],
+  "creative": "creative.json",
+  "expect": [
+    {
+      "file": "a.jpg",
+      "target": "conf.example/n/f",
+      "result": "pass",
+      "checks": []
+    }
+  ]
+}

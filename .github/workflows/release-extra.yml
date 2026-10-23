@@ -1,0 +1,181 @@
+# Release channels that cargo-dist does not generate: npm (with trusted
+# publishing), Scoop, winget and the container image. Called from release.yml
+# (post-announce-jobs) once the GitHub release and the Homebrew publish have
+# succeeded. Runs only for version tags; nothing here triggers on its own.
+name: Release extras
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        description: The dist plan manifest (JSON) from the release workflow
+        required: true
+        type: string
+
+permissions: {}
+
+env:
+  OWNER_REPO: OpenCRS-Org/opencrs
+
+jobs:
+  # npm trusted publishing: no token. npm accepts the job's OIDC identity
+  # because @opencrs/cli has a trusted publisher configured for this repo and
+  # release.yml (the calling workflow), and publishes with provenance.
+  # dist's own publish-npm job has no id-token permission, so it's off
+  # (dist-workspace.toml); dist still builds the package.
+  npm:
+    name: Publish @opencrs/cli to npm
+    if: ${{ !fromJson(inputs.plan).announcement_is_prerelease || fromJson(inputs.plan).publish_prereleases }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      TAG: ${{ fromJson(inputs.plan).announcement_tag }}
+      PLAN: ${{ inputs.plan }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      # Trusted publishing needs npm 11.5.1 or later.
+      - name: Install npm 11.21.1
+        run: npm install -g npm@11.21.1
+      - name: Fetch the package dist built
+        run: |
+          set -euo pipefail
+          mkdir npm
+          for pkg in $(jq -r '.releases[].artifacts[] | select(endswith("-npm-package.tar.gz"))' <<< "$PLAN"); do
+            gh release download "$TAG" --repo "$OWNER_REPO" --dir npm --pattern "$pkg"
+          done
+          ls -l npm
+      - name: Publish
+        run: |
+          set -euo pipefail
+          for pkg in npm/*-npm-package.tar.gz; do
+            npm publish --provenance --access public "$pkg"
+          done
+
+  scoop:
+    name: Update the Scoop bucket
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      TAG: ${{ fromJson(inputs.plan).announcement_tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out the bucket
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: OpenCRS-Org/scoop-bucket
+          token: ${{ secrets.SCOOP_BUCKET_TOKEN }}
+          path: bucket-repo
+      # dist's Windows zips have opencrs.exe at the top level, with no
+      # directory to extract from, so the manifest must not name one.
+      - name: Rewrite the manifest for this version
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          base="https://github.com/${OWNER_REPO}/releases/download/${TAG}"
+          mkdir sums
+          gh release download "$TAG" --repo "$OWNER_REPO" --dir sums \
+            --pattern 'opencrs-cli-x86_64-pc-windows-msvc.zip.sha256' \
+            --pattern 'opencrs-cli-aarch64-pc-windows-msvc.zip.sha256'
+          h64=$(cut -d' ' -f1 sums/opencrs-cli-x86_64-pc-windows-msvc.zip.sha256)
+          harm=$(cut -d' ' -f1 sums/opencrs-cli-aarch64-pc-windows-msvc.zip.sha256)
+          m=bucket-repo/bucket/opencrs.json
+          jq --arg v "$version" --arg base "$base" --arg h64 "$h64" --arg harm "$harm" '
+            .version = $v
+            | .architecture["64bit"].url = "\($base)/opencrs-cli-x86_64-pc-windows-msvc.zip"
+            | .architecture["64bit"].hash = $h64
+            | .architecture.arm64.url = "\($base)/opencrs-cli-aarch64-pc-windows-msvc.zip"
+            | .architecture.arm64.hash = $harm
+            | del(.architecture[].extract_dir)
+          ' "$m" > "$m.new"
+          mv "$m.new" "$m"
+      - name: Commit and push
+        working-directory: bucket-repo
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add bucket/opencrs.json
+          git diff --cached --quiet && { echo "manifest already current"; exit 0; }
+          git commit -m "opencrs ${TAG#v}"
+          git push
+
+  winget:
+    name: Submit to winget
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      # The first submission of OpenCRS.opencrs is a manual PR to
+      # microsoft/winget-pkgs (reviewed by Microsoft); this job handles updates
+      # to a package that already exists there.
+      - name: Open the winget-pkgs update PR
+        uses: vedantmgoyal9/winget-releaser@b7370d4d152efdce803a26cc6ca9eee58cb2ad54 # v2
+        with:
+          identifier: OpenCRS.opencrs
+          installers-regex: '-pc-windows-msvc\.zip$'
+          release-repository: OpenCRS-Org/opencrs
+          release-tag: ${{ fromJson(inputs.plan).announcement_tag }}
+          token: ${{ secrets.WINGET_TOKEN }}
+
+  container:
+    name: Publish the container image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      TAG: ${{ fromJson(inputs.plan).announcement_tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Fetch the static musl binaries from the release
+        run: |
+          set -euo pipefail
+          mkdir -p ctx/amd64 ctx/arm64
+          for pair in "amd64 x86_64" "arm64 aarch64"; do
+            read -r docker_arch rust_arch <<< "$pair"
+            gh release download "$TAG" --repo "$OWNER_REPO" --dir ctx \
+              --pattern "opencrs-cli-${rust_arch}-unknown-linux-musl.tar.xz"
+            tar -xJf "ctx/opencrs-cli-${rust_arch}-unknown-linux-musl.tar.xz" -C "ctx/${docker_arch}" \
+              --strip-components=1 "opencrs-cli-${rust_arch}-unknown-linux-musl/opencrs"
+          done
+          cp Dockerfile ctx/Dockerfile
+          ls -l ctx/amd64 ctx/arm64
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Compute tags
+        id: tags
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          t="ghcr.io/opencrs-org/opencrs:${version}"
+          # Prereleases do not move :latest.
+          case "$version" in
+            *-*) ;;
+            *) t="$t,ghcr.io/opencrs-org/opencrs:latest" ;;
+          esac
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tags=$t" >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ctx
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/OpenCRS-Org/opencrs
+            org.opencontainers.image.version=${{ steps.tags.outputs.version }}

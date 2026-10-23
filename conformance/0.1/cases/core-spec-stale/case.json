@@ -1,0 +1,24 @@
+{
+  "id": "core-spec-stale",
+  "level": "core",
+  "spec": "Keeping copies fresh; Standard check codes: CRS-SPEC-STALE",
+  "description": "Validating after the document's expires_at fails.",
+  "now": "2027-07-01T00:00:00+10:00",
+  "specs": [
+    "screens.json"
+  ],
+  "creative": "creative.json",
+  "expect": [
+    {
+      "file": "a.jpg",
+      "target": "conf.example/n/f",
+      "result": "fail",
+      "checks": [
+        {
+          "code": "CRS-SPEC-STALE",
+          "severity": "error"
+        }
+      ]
+    }
+  ]
+}

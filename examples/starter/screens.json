@@ -1,0 +1,29 @@
+{
+  "$schema": "https://opencrs.dev/schema/0.1/screens.schema.json",
+  "opencrs": "0.1",
+  "publisher": "your-domain.example",
+  "updated_at": "2026-11-01T09:00:00+11:00",
+  "expires_at": "2027-02-01T00:00:00+11:00",
+  "networks": [
+    {
+      "id": "main",
+      "name": "Your Screens",
+      "formats": [
+        {
+          "id": "portrait-1080",
+          "pixels": [1080, 1920],
+          "media": {
+            "static": ["image/jpeg", "image/png"],
+            "motion": ["video/mp4"],
+            "slot_s": 10,
+            "max_bytes": 52428800
+          }
+        }
+      ],
+      "screens": [
+        { "id": "SCREEN-001", "format": "portrait-1080" },
+        { "id": "SCREEN-002", "format": "portrait-1080" }
+      ]
+    }
+  ]
+}

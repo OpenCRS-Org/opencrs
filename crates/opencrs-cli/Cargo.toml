@@ -1,0 +1,35 @@
+[package]
+name = "opencrs-cli"
+version = "0.0.0"
+description = "Tooling for OpenCRS, the Open Creative Requirements Specification"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["opencrs", "dooh", "creative", "specification"]
+publish = false
+
+[lib]
+name = "opencrs_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "opencrs"
+path = "src/main.rs"
+
+[dependencies]
+opencrs = { path = "../opencrs", features = ["fs", "parallel"] }
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "alloc"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# rustls with ring (no OpenSSL, builds on musl); trust the system store like Go.
+# "~3.5": the custom resolver uses ureq::unversioned, which may change in a
+# minor release.
+ureq = { version = "~3.5", features = ["platform-verifier"] }
+url = "2.5.8"
+
+[dev-dependencies]
+tempfile = "3"
+
+[package.metadata.dist]
+dist = true

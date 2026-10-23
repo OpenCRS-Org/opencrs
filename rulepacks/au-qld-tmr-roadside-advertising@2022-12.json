@@ -1,0 +1,42 @@
+{
+  "rule_pack": "au-qld-tmr-roadside-advertising",
+  "version": "2022-12",
+  "title": "Queensland electronic billboards visible from state-controlled roads",
+  "source_title": "Roadside Advertising Manual, Edition 4, Technical Volume (Queensland Department of Transport and Main Roads, December 2022)",
+  "source_url": "https://www.tmr.qld.gov.au/-/media/busind/techstdpubs/Traffic-management/Roadside-advertising-manual/Roadside-Advertising-Manual---Technical-Volume.pdf?la=en",
+  "status": "draft",
+  "status_note": "Every value checked against the Technical Volume on 22 October 2026 (section and page citations below), downloaded from the source URL; not yet independently reviewed",
+  "citations": {
+    "creative.motion.allowed": "s. 3.6, p. 19 (non-static electronic displays not permitted to be visible to drivers); s. 3.6.1.2 and 3.6.1.3, p. 20",
+    "creative.motion.no_flashing": "s. 3.6.1.3, p. 20 (\"not permitted to move, flash or change brightness\")",
+    "creative.no_traffic_device_imagery": "s. 2.1, p. 3 (imitates a traffic control device; gives instructions to traffic); s. 2.1.1, pp. 4-5 (shape and colour)",
+    "creative.no_sequencing": "s. 3.6.1.3, p. 20 (sequential or multi-frame messages, on one billboard or successive billboards)",
+    "playback.min_dwell_s": "s. 3.6.1.4, Table 3.6.1.4, p. 21",
+    "playback.max_transition_s": "s. 3.6.1.3, p. 20 (\"in less than 0.5 seconds\")",
+    "playback.failure_state": "s. 3.6.1.3, p. 20 (\"default to\" a blank screen)"
+  },
+  "notes": [
+    "Page numbers are the Technical Volume's printed page numbers. Section 3.6 applies to electronic billboards on private property or within state-controlled roads that are visible from a state-controlled road, motorway or motorway-standard road; electronic billboards of 4 m² or less follow the same operating rules (s. 4.4, p. 30). Roads controlled by local government are outside the manual.",
+    "Edition 4 was still the current edition on the department's manual page as captured by web.archive.org in May 2026 (Edition 3 is listed as replaced in December 2022). The department's own page refuses automated requests, so the amendment register wasn't read.",
+    "Dwell: Table 3.6.1.4 gives 10 s for a state-controlled road with a speed limit 'less than and not equal to 80 km/h', 15 s at 80 km/h and above, and 25 s for any device visible from a motorway or motorway-standard road. Placement can't say whether a road is a motorway, so the 25 s rule is a note on every band; a publisher with such a screen should set rules.playback.min_dwell_s to 25.",
+    "Transition: the source requires less than 0.5 s, with no 'fly in', 'scroll' or other change effects and no blank screen between messages. max_transition_s is an upper bound, so 0.5 s is the closest value.",
+    "failure_state is 'blank': the source requires a blank screen on any malfunction, and doesn't say what colour.",
+    "Not encoded: luminance. For electronic billboards Table 3.6.1.5 (p. 21) sets maximums by the ambient light measured at the sign (150 cd/m² at 0-10 lux, 200 at 11-40, 250 at 41-100, 400 at 101-400, 700 at 401-1,000, 1,500 at 1,001-4,000, 2,300 at 4,001-10,000, 4,000 at 10,001-40,000 and 6,000 at 40,001-100,000 lux), which no lighting period or zone can select. Section 3.6 takes precedence over the general limits of Appendix D, Table D1 (p. 135: 500, 350 and 300 cd/m² in lighting environment zones 1-3), which apply to other illuminated devices.",
+    "Not encoded: legibility. Section 2.1.1 (pp. 6-7) gives capital letter heights for 6, 9 and 12-word signs but says they are advisory, not mandatory.",
+    "Not encoded: no split screens (s. 3.6.1.3), data logging (s. 3.6.1.7), spacing, advance visibility of at least 3 s and other siting criteria (s. 3.6.2), which aren't creative or playback rules. The department's factsheet on small electronic devices in school zones wasn't read.",
+    "Discrepancies with the OMA Digital Signage Policy (February 2024, Table 1), which this pack replaces as the Queensland pack: the OMA says 15 s 'above 80 km/h', where the manual says 80 km/h and above, and it lists 25 s as a speed band where the manual ties it to visibility from a motorway. The OMA treats motion as an industry position, but the manual doesn't permit non-static displays visible to drivers."
+  ],
+  "creative": {
+    "motion": { "allowed": false, "no_flashing": true },
+    "no_traffic_device_imagery": true,
+    "no_sequencing": true
+  },
+  "playback": {
+    "min_dwell_s": [
+      { "speed_kmh_below": 80, "value": 10, "note": "25 s if visible from a motorway or motorway-standard road" },
+      { "speed_kmh_from": 80, "value": 15, "note": "25 s if visible from a motorway or motorway-standard road" }
+    ],
+    "max_transition_s": 0.5,
+    "failure_state": "blank"
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://opencrs.dev/schema/0.1/report.schema.json",
+  "title": "OpenCRS 0.1 validation report",
+  "description": "Whether one creative file meets one target's requirements.",
+  "type": "object",
+  "required": ["opencrs", "validator", "target", "result", "checks"],
+  "properties": {
+    "opencrs": { "$ref": "common.schema.json#/$defs/version" },
+    "validator": {
+      "type": "object",
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "type": "string" },
+        "version": { "type": "string" }
+      }
+    },
+    "file": { "type": "string" },
+    "file_sha256": { "type": "string" },
+    "target": { "$ref": "common.schema.json#/$defs/global_ref" },
+    "spec_updated_at": { "$ref": "common.schema.json#/$defs/datetime" },
+    "checked_at": { "$ref": "common.schema.json#/$defs/datetime" },
+    "result": {
+      "description": "fail if any check is an error; otherwise incomplete if any is not_checked; otherwise warn if any is a warning; otherwise pass.",
+      "enum": ["pass", "warn", "fail", "incomplete"]
+    },
+    "checks": {
+      "description": "Findings only. Checks that passed are not listed.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["code", "severity", "message"],
+        "properties": {
+          "code": { "$ref": "common.schema.json#/$defs/check_code" },
+          "severity": { "enum": ["error", "warning", "info", "not_checked"] },
+          "message": { "type": "string" },
+          "rect_px": { "$ref": "common.schema.json#/$defs/rect_px" },
+          "element": { "type": "string", "description": "Role of the element concerned." },
+          "screens": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Screen ids the finding applies to, when it doesn't apply to every screen of the target."
+          },
+          "source": { "enum": ["file", "manifest"], "description": "Where the measured value came from." },
+          "ext": { "$ref": "common.schema.json#/$defs/ext" }
+        }
+      }
+    },
+    "ext": { "$ref": "common.schema.json#/$defs/ext" }
+  }
+}

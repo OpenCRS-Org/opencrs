@@ -1,0 +1,153 @@
+{
+  "opencrs": "0.1",
+  "campaign": {
+    "id": "conformance",
+    "advertiser": "Example Cafe",
+    "category": "IAB8",
+    "tags": [
+      "offer"
+    ]
+  },
+  "files": [
+    {
+      "file": "unmeasured.mp4",
+      "media_type": "video/mp4",
+      "pixels": [
+        1080,
+        1920
+      ],
+      "bytes": 2400000,
+      "targets": [
+        "conf.example/n/screen/S1"
+      ],
+      "duration_s": 10,
+      "elements": [
+        {
+          "role": "headline",
+          "text": "Lunch specials.",
+          "rect_px": [
+            90,
+            210,
+            700,
+            260
+          ],
+          "cap_height_px": 92
+        },
+        {
+          "role": "legal",
+          "text": "Weekdays 11:30 to 2:30",
+          "rect_px": [
+            90,
+            1640,
+            520,
+            40
+          ],
+          "cap_height_px": 20
+        },
+        {
+          "role": "logo",
+          "rect_px": [
+            90,
+            130,
+            260,
+            60
+          ]
+        }
+      ]
+    },
+    {
+      "file": "fast.mp4",
+      "media_type": "video/mp4",
+      "pixels": [
+        1080,
+        1920
+      ],
+      "bytes": 2400000,
+      "targets": [
+        "conf.example/n/screen/S1"
+      ],
+      "duration_s": 10,
+      "max_flash_hz": 5,
+      "elements": [
+        {
+          "role": "headline",
+          "text": "Lunch specials.",
+          "rect_px": [
+            90,
+            210,
+            700,
+            260
+          ],
+          "cap_height_px": 92
+        },
+        {
+          "role": "legal",
+          "text": "Weekdays 11:30 to 2:30",
+          "rect_px": [
+            90,
+            1640,
+            520,
+            40
+          ],
+          "cap_height_px": 20
+        },
+        {
+          "role": "logo",
+          "rect_px": [
+            90,
+            130,
+            260,
+            60
+          ]
+        }
+      ]
+    },
+    {
+      "file": "slow.mp4",
+      "media_type": "video/mp4",
+      "pixels": [
+        1080,
+        1920
+      ],
+      "bytes": 2400000,
+      "targets": [
+        "conf.example/n/screen/S1"
+      ],
+      "duration_s": 10,
+      "max_flash_hz": 2,
+      "elements": [
+        {
+          "role": "headline",
+          "text": "Lunch specials.",
+          "rect_px": [
+            90,
+            210,
+            700,
+            260
+          ],
+          "cap_height_px": 92
+        },
+        {
+          "role": "legal",
+          "text": "Weekdays 11:30 to 2:30",
+          "rect_px": [
+            90,
+            1640,
+            520,
+            40
+          ],
+          "cap_height_px": 20
+        },
+        {
+          "role": "logo",
+          "rect_px": [
+            90,
+            130,
+            260,
+            60
+          ]
+        }
+      ]
+    }
+  ]
+}

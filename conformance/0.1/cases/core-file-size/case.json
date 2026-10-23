@@ -1,0 +1,35 @@
+{
+  "id": "core-file-size",
+  "level": "core",
+  "spec": "Standard check codes: CRS-FILE-SIZE",
+  "description": "A file over max_bytes fails; a file whose size is unknown is not checked.",
+  "now": "2026-10-22T12:00:00+11:00",
+  "specs": [
+    "screens.json"
+  ],
+  "creative": "creative.json",
+  "expect": [
+    {
+      "file": "a.jpg",
+      "target": "conf.example/n/f",
+      "result": "fail",
+      "checks": [
+        {
+          "code": "CRS-FILE-SIZE",
+          "severity": "error"
+        }
+      ]
+    },
+    {
+      "file": "b.jpg",
+      "target": "conf.example/n/f",
+      "result": "incomplete",
+      "checks": [
+        {
+          "code": "CRS-FILE-SIZE",
+          "severity": "not_checked"
+        }
+      ]
+    }
+  ]
+}

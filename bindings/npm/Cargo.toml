@@ -1,0 +1,29 @@
+[package]
+name = "opencrs-npm"
+version = "0.0.0"
+description = "Node.js bindings for the OpenCRS core (napi-rs)"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+# napi symbols only resolve inside Node, so the Rust test harness can't link.
+# The package is tested from JavaScript (test/opencrs.test.mjs).
+test = false
+doctest = false
+
+[dependencies]
+opencrs = { path = "../../crates/opencrs", features = ["fs", "parallel"] }
+napi = { version = "3", default-features = false, features = ["napi4", "serde-json"] }
+napi-derive = "3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[build-dependencies]
+napi-build = "2"
+
+[package.metadata.dist]
+dist = false

@@ -1,0 +1,39 @@
+{
+  "id": "full-pack-unverified",
+  "level": "full",
+  "spec": "Regulatory rule packs: names, versions and status (a pack short of draft is reported as info)",
+  "description": "Tasmania's pack is unverified, which is reported as info. It prohibits motion, so a video fails and a still passes.",
+  "now": "2026-10-22T12:00:00+11:00",
+  "specs": [
+    "screens.json"
+  ],
+  "creative": "creative.json",
+  "expect": [
+    {
+      "file": "clip.mp4",
+      "target": "conf.example/road/screen/R1",
+      "result": "fail",
+      "checks": [
+        {
+          "code": "CRS-MOTION-PROHIBITED",
+          "severity": "error"
+        },
+        {
+          "code": "CRS-RULE-PACK",
+          "severity": "info"
+        }
+      ]
+    },
+    {
+      "file": "still.png",
+      "target": "conf.example/road/screen/R1",
+      "result": "pass",
+      "checks": [
+        {
+          "code": "CRS-RULE-PACK",
+          "severity": "info"
+        }
+      ]
+    }
+  ]
+}

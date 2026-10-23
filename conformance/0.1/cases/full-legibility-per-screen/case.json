@@ -1,0 +1,44 @@
+{
+  "id": "full-legibility-per-screen",
+  "level": "full",
+  "spec": "Validation (one report per file and target, findings per screen)",
+  "description": "The same 18 px legal line warns on S1 (16 px minimum) and fails on S2 (23 px); the 92 px headline warns on S2 (77 px, below 96.25).",
+  "now": "2026-10-22T12:00:00+11:00",
+  "specs": [
+    "screens.json"
+  ],
+  "creative": "creative.json",
+  "expect": [
+    {
+      "file": "a.png",
+      "target": "conf.example/n/totem",
+      "result": "fail",
+      "checks": [
+        {
+          "code": "CRS-LEGIBILITY",
+          "severity": "warning",
+          "element": "legal",
+          "screens": [
+            "S1"
+          ]
+        },
+        {
+          "code": "CRS-LEGIBILITY",
+          "severity": "error",
+          "element": "legal",
+          "screens": [
+            "S2"
+          ]
+        },
+        {
+          "code": "CRS-LEGIBILITY",
+          "severity": "warning",
+          "element": "headline",
+          "screens": [
+            "S2"
+          ]
+        }
+      ]
+    }
+  ]
+}

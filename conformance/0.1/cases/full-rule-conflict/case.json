@@ -1,0 +1,24 @@
+{
+  "id": "full-rule-conflict",
+  "level": "full",
+  "spec": "Inheritance (non-overlapping position limits); CRS-RULE-CONFLICT",
+  "description": "The network wants the legal line at the bottom and the venue at the top: no creative can comply, which is reported as a rule conflict.",
+  "now": "2026-10-22T12:00:00+11:00",
+  "specs": [
+    "screens.json"
+  ],
+  "creative": "creative.json",
+  "expect": [
+    {
+      "file": "a.png",
+      "target": "conf.example/n/screen/S1",
+      "result": "fail",
+      "checks": [
+        {
+          "code": "CRS-RULE-CONFLICT",
+          "severity": "error"
+        }
+      ]
+    }
+  ]
+}

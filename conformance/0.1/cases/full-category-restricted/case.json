@@ -1,0 +1,24 @@
+{
+  "id": "full-category-restricted",
+  "level": "full",
+  "spec": "Results (categories match hierarchically)",
+  "description": "IAB7 is restricted, so its subcategory IAB7-5 fails.",
+  "now": "2026-10-22T12:00:00+11:00",
+  "specs": [
+    "screens.json"
+  ],
+  "creative": "creative.json",
+  "expect": [
+    {
+      "file": "a.png",
+      "target": "conf.example/n/screen/S1",
+      "result": "fail",
+      "checks": [
+        {
+          "code": "CRS-CATEGORY",
+          "severity": "error"
+        }
+      ]
+    }
+  ]
+}

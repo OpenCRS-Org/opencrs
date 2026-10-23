@@ -1,0 +1,49 @@
+{
+  "rule_pack": "au-wa-mrwa-digital-signs",
+  "version": "2025-05",
+  "title": "Western Australian digital signs on or visible from state roads",
+  "source_title": "Policy and Assessment Guidelines for Digital Advertising Signs, D24#681194, revision 01 May 2025, issued August 2025 (Main Roads Western Australia)",
+  "source_url": "https://www.mainroads.wa.gov.au/4a612c/globalassets/technical-commercial/technical-library/road-and-traffic-engineering/traffic-management/advertising-and-election-signs/policy-and-assessment-guidelines-for-digital-advertising-signs.pdf",
+  "status": "draft",
+  "status_note": "Every value checked against the guidelines on 22 October 2026 (section, page and table citations below), downloaded from the source URL; not yet independently reviewed",
+  "citations": {
+    "creative.motion.allowed": "s. 8.1, p. 27, item 6; s. 8.3.2.3, p. 30",
+    "creative.motion.no_flashing": "s. 8.3.2.2, p. 30; s. 8.1, p. 27, item 6",
+    "creative.no_traffic_device_imagery": "s. 8.4.1, p. 33 (images of road signs or traffic control signals); s. 8.4.5, p. 34 (instructions to drivers)",
+    "creative.no_sequencing": "s. 8.4.2, pp. 33-34",
+    "playback.min_dwell_s": "s. 8.3.3, pp. 30-32, Table 6 (crash risk level 1, offset 0-50 m)",
+    "playback.max_transition_s": "s. 8.3.2.1, p. 30 (\"within 100 milliseconds\")",
+    "playback.max_luminance_cd_m2": "s. 8.3.4, p. 33, Table 7"
+  },
+  "notes": [
+    "Page numbers are the guidelines' printed page numbers. The guidelines apply to digital signs within a state road, within 500 m of and visible from a state road, or within 100 m of a traffic control signal on any road (s. 2.1, p. 6). The planning authority's approval is needed as well (s. 1, p. 5).",
+    "The same file is also published at https://www.mainroads.wa.gov.au/4a43ae/globalassets/technical-commercial/technical-library/road-and-traffic-engineering/traffic-management/advertising-and-election-signs/policy-and-assessment-guidelines-for-digital-advertising-signs.pdf; both downloads were byte-identical. The cover says May 2025 (revision 01) and the document control table says issued August 2025; the version follows the cover.",
+    "Dwell depends on more than speed. Table 6 (p. 32) sets it by crash risk level (1-3, from Main Roads' Crash Risk Category Map), the sign's horizontal offset from the road (0-50 m, 50-100 m, over 100 m) and the speed limit (70 km/h or less, 80-90 km/h, 100 km/h or more): from 10, 15 and 20 s at level 1 with an offset under 50 m, up to 35, 45 and 80 s at level 3 with an offset over 100 m. Placement can't express crash risk or offset, so this pack gives the lowest value in each speed column as a floor, and notes the highest. Main Roads' approval sets the site's dwell; record it on the screen as rules.playback.min_dwell_s, and the longer value wins.",
+    "Table 6 has no column for 71-79 km/h or 91-99 km/h. Posted speed limits are multiples of 10 km/h, so the bands change at 80 and 100 km/h.",
+    "Also in s. 8.3.3: a sign viewable only from roads of 40 km/h or less has a minimum dwell of 10 s; a sign of 6 m² or less has 10 s where it isn't in a level 4 location or (at 60 km/h and above) a prohibition zone, and 30 s otherwise; a sign seen from several roads takes the longest dwell; and Main Roads can require a longer dwell after installation. Signs larger than 6 m² aren't permitted at crash risk level 4 (s. 8.1, item 1).",
+    "Motion: animation of any sort mustn't be displayed on a sign a driver can see (s. 8.3.2.3), and s. 8.1 item 6 refuses approval for animation, movement, pulsing or flashing. Moving images may be supported case by case where the road has a high place value and a speed limit of 40 km/h or less; a screen approved on that basis shouldn't reference this pack.",
+    "Transitions must also have no fade, zoom or fly-in effects and no blank screen between messages, and brightness must be managed so a change from dark to light content doesn't appear to flash (s. 8.3.2.1).",
+    "Luminance zones are the environmental zones of AS/NZS 4282, Table 3.1 (set placement.luminance_zone to A0-A4): A4 town and city centres and other commercial areas with high off-street ambient lighting; A3 suburban areas with medium off-street lighting; A2 sparsely inhabited rural and semi-rural areas; A1 relatively uninhabited rural areas with no off-road lighting; A0 intrinsically dark. Day is 6,000 cd/m² and dawn/dusk 600 cd/m² in every zone; at night A1 and A0 are zero, so the sign must be off. Luminance changes must happen during a content transition (s. 8.3.4).",
+    "Not encoded: s. 8.4.3 (text intended for drivers must be legible, and other text small enough to read only from a stationary vehicle) and s. 8.4.4 (generally no more than ten elements, where a word, object or logo counts as one). Neither is the glance word limit that CRS-GLANCE-TEXT checks. Also not encoded: website addresses, phone numbers and social media instructions, which mustn't be shown unless too small to distract a driver (s. 8.4.5), and the advertising content standards of s. 8.5.",
+    "Not encoded: visibility distance, crash risk, prohibition zones, size, height and spacing limits (ss. 6 and 8.1), installation conditions (s. 8.2) and the period of approval (s. 8.6), which are siting and approval conditions.",
+    "Discrepancies with the OMA Digital Signage Policy (February 2024), which this pack replaces as the WA pack: the OMA's Table 1 gives dwell by speed alone (20 s at 110 km/h up to 45 s below 50 km/h), which matches no row of Table 6 here; its Table 2 gives 300 cd/m² at night, where Table 7 gives 350, 250, 150 or zero by zone; and its rule that luminance starts at 50% of the maximum until Main Roads approves an increase isn't in these guidelines. The OMA summary may reflect Main Roads' earlier policy, which wasn't checked. The OMA treats motion as an industry position, but these guidelines prohibit it."
+  ],
+  "creative": {
+    "motion": { "allowed": false, "no_flashing": true },
+    "no_traffic_device_imagery": true,
+    "no_sequencing": true
+  },
+  "playback": {
+    "min_dwell_s": [
+      { "speed_kmh_below": 80, "value": 10, "note": "the floor of Table 6; up to 35 s by crash risk and offset" },
+      { "speed_kmh_from": 80, "speed_kmh_below": 100, "value": 15, "note": "the floor of Table 6; up to 45 s by crash risk and offset" },
+      { "speed_kmh_from": 100, "value": 20, "note": "the floor of Table 6; up to 80 s by crash risk and offset" }
+    ],
+    "max_transition_s": 0.1,
+    "max_luminance_cd_m2": {
+      "day": { "default": 6000 },
+      "twilight": { "default": 600 },
+      "night": { "A4": 350, "A3": 250, "A2": 150, "A1": 0, "A0": 0 }
+    }
+  }
+}

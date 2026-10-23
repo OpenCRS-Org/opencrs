@@ -1,0 +1,87 @@
+{
+  "opencrs": "0.1",
+  "publisher": "harbourline.example",
+  "updated_at": "2026-10-20T09:00:00+11:00",
+  "networks": [
+    {
+      "id": "roadside-nsw",
+      "name": "Harbourline Roadside NSW",
+      "rules": { "rule_packs": ["au-nsw-transport-corridor@2017-11"] },
+      "formats": [
+        {
+          "id": "billboard-12x3",
+          "pixels": [1248, 336],
+          "physical_mm": [12480, 3360],
+          "media": { "static": ["image/jpeg", "image/png"], "motion": ["video/mp4"], "slot_s": 10, "fps": 25 }
+        }
+      ],
+      "screens": [
+        {
+          "id": "HR-M4-001", "format": "billboard-12x3",
+          "placement": { "environment": "outdoor", "speed_kmh": 90, "faces_road": true, "school_zone": false, "luminance_zone": "zone_4" },
+          "viewing": { "distance_m": [30, 200] }
+        },
+        {
+          "id": "HR-PAR-002", "format": "billboard-12x3",
+          "placement": { "environment": "outdoor", "speed_kmh": 60, "faces_road": true, "school_zone": true, "luminance_zone": "zone_2", "motion_allowed": true },
+          "viewing": { "distance_m": [15, 120] },
+          "rules": {
+            "motion": { "allowed": true },
+            "playback": { "min_dwell_s": 40, "max_transition_s": 0.5 },
+            "brightness": { "max_night_cd_m2": 150 },
+            "notes": "Site consent: 40 s dwell and 150 cd/m² at night."
+          }
+        },
+        {
+          "id": "HR-CBD-003", "format": "billboard-12x3",
+          "placement": { "environment": "outdoor", "luminance_zone": "zone_1" }
+        },
+        {
+          "id": "HR-UNK-004", "format": "billboard-12x3",
+          "placement": { "environment": "outdoor", "speed_kmh": 70, "school_zone": false, "luminance_zone": "zone_3" },
+          "viewing": { "distance_m": [20, 150] },
+          "rules": { "rule_packs": ["au-nt-roadside@2020-01", "au-nsw-transport-corridor@2009-01"] }
+        }
+      ]
+    },
+    {
+      "id": "roadside-other",
+      "name": "Harbourline Roadside other states",
+      "formats": [
+        {
+          "id": "billboard-12x3",
+          "pixels": [1248, 336],
+          "physical_mm": [12480, 3360],
+          "media": { "static": ["image/jpeg", "image/png"], "motion": ["video/mp4"], "slot_s": 10, "fps": 25 }
+        }
+      ],
+      "screens": [
+        {
+          "id": "HP-WA-001", "format": "billboard-12x3",
+          "placement": { "environment": "outdoor", "speed_kmh": 60, "luminance_zone": "A3" },
+          "rules": { "rule_packs": ["au-wa-mrwa-digital-signs@2025-05"] }
+        },
+        {
+          "id": "HP-QLD-002", "format": "billboard-12x3",
+          "placement": { "environment": "outdoor", "speed_kmh": 100 },
+          "rules": { "rule_packs": ["au-qld-tmr-roadside-advertising@2022-12"] }
+        },
+        {
+          "id": "HP-VIC-003", "format": "billboard-12x3",
+          "placement": { "environment": "outdoor", "speed_kmh": 80, "luminance_zone": "cat_a_medium" },
+          "rules": { "rule_packs": ["au-vic-dtp-illuminated-signage@2023-10"], "playback": { "min_dwell_s": 45 } }
+        },
+        {
+          "id": "HP-SA-004", "format": "billboard-12x3",
+          "placement": { "environment": "outdoor", "speed_kmh": 60 },
+          "rules": { "rule_packs": ["au-sa-dit-advertising-signs@2014-08"] }
+        },
+        {
+          "id": "HP-TAS-005", "format": "billboard-12x3",
+          "placement": { "environment": "outdoor", "speed_kmh": 70 },
+          "rules": { "rule_packs": ["au-tas-spp-signs-code@2024-06"] }
+        }
+      ]
+    }
+  ]
+}

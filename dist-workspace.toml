@@ -1,0 +1,55 @@
+[workspace]
+members = ["cargo:."]
+
+# Config for 'dist'
+[dist]
+# The preferred dist version to use in CI (Cargo.toml SemVer syntax)
+cargo-dist-version = "0.33.1"
+# CI backends to support
+ci = "github"
+# The installers to generate for each app
+installers = ["shell", "powershell", "npm", "homebrew"]
+# A GitHub repo to push Homebrew formulas to
+tap = "OpenCRS-Org/homebrew-tap"
+formula = "opencrs"
+# Target platforms to build apps for (Rust target-triple syntax)
+targets = [
+  "aarch64-apple-darwin",
+  "x86_64-apple-darwin",
+  "x86_64-unknown-linux-gnu",
+  "aarch64-unknown-linux-gnu",
+  "x86_64-unknown-linux-musl",
+  "aarch64-unknown-linux-musl",
+  "x86_64-pc-windows-msvc",
+  "aarch64-pc-windows-msvc",
+]
+# Publish jobs to run in CI. npm is published by release-extra.yml with
+# trusted publishing (OIDC), which dist's publish-npm job can't do; the npm
+# installer above still builds the package.
+publish-jobs = ["homebrew"]
+# The npm scope and package name: @opencrs/cli
+npm-scope = "@opencrs"
+npm-package = "cli"
+# Which actions to run on pull requests
+pr-run-mode = "plan"
+# Extra jobs that run after the announce step (see .github/workflows/release-extra.yml)
+post-announce-jobs = ["./release-extra"]
+# A called workflow can't have more permissions than its caller job, and the
+# caller otherwise gets only the workflow's contents: write. release-extra
+# needs packages: write for the container image and id-token: write for npm
+# trusted publishing.
+github-custom-job-permissions = { "release-extra" = { contents = "read", packages = "write", id-token = "write" } }
+# Path that installers should place binaries in
+install-path = "CARGO_HOME"
+# Whether to install an updater program
+install-updater = false
+# Attest every artifact's build provenance (actions/attest-build-provenance)
+github-attestations = true
+# Pin the actions release.yml uses to commits (dist writes these in place of
+# its default tags). Update by looking up each tag's commit:
+#   gh api repos/OWNER/REPO/git/ref/tags/TAG (dereference annotated tags)
+[dist.github-action-commits]
+"actions/checkout" = "d23441a48e516b6c34aea4fa41551a30e30af803" # v6.1.0
+"actions/upload-artifact" = "cf430e030ddbb5b0abf93d22962f4752f3646cd9" # v7.0.2
+"actions/download-artifact" = "9000827ccba6bdab643e8b6fd33ac0654aef8333" # v8.0.2
+"actions/attest" = "1e69f48acb82d1966a394da916b4c1698aa569d6" # v4.2.2

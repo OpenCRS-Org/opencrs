@@ -1,0 +1,27 @@
+{
+  "id": "full-remove-required",
+  "level": "full",
+  "spec": "Inheritance: remove drops inherited required elements",
+  "description": "S2 removes the network's legal-line requirement, so offer creative without one fails only on S1.",
+  "now": "2026-10-22T12:00:00+11:00",
+  "specs": [
+    "screens.json"
+  ],
+  "creative": "creative.json",
+  "expect": [
+    {
+      "file": "a.png",
+      "target": "conf.example/n/totem",
+      "result": "fail",
+      "checks": [
+        {
+          "code": "CRS-REQUIRED-ELEMENT",
+          "severity": "error",
+          "screens": [
+            "S1"
+          ]
+        }
+      ]
+    }
+  ]
+}

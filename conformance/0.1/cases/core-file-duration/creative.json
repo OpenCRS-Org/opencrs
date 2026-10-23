@@ -1,0 +1,25 @@
+{
+  "opencrs": "0.1",
+  "campaign": {
+    "id": "conformance",
+    "advertiser": "Example Cafe",
+    "category": "IAB8",
+    "tags": [
+      "offer"
+    ]
+  },
+  "files": [
+    {
+      "file": "clip.mp4",
+      "media_type": "video/mp4",
+      "pixels": [
+        1920,
+        1080
+      ],
+      "duration_s": 12,
+      "targets": [
+        "conf.example/n/f"
+      ]
+    }
+  ]
+}

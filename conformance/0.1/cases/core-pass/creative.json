@@ -1,0 +1,58 @@
+{
+  "opencrs": "0.1",
+  "campaign": {
+    "id": "conformance",
+    "advertiser": "Example Cafe",
+    "category": "IAB8",
+    "tags": [
+      "offer"
+    ]
+  },
+  "files": [
+    {
+      "file": "a.jpg",
+      "media_type": "image/jpeg",
+      "pixels": [
+        1920,
+        1080
+      ],
+      "bytes": 1000000,
+      "targets": [
+        "conf.example/n/f"
+      ],
+      "elements": [
+        {
+          "role": "headline",
+          "text": "Lunch specials.",
+          "rect_px": [
+            90,
+            210,
+            700,
+            260
+          ],
+          "cap_height_px": 92
+        },
+        {
+          "role": "legal",
+          "text": "Weekdays 11:30 to 2:30",
+          "rect_px": [
+            90,
+            1640,
+            520,
+            40
+          ],
+          "cap_height_px": 20
+        },
+        {
+          "role": "logo",
+          "rect_px": [
+            90,
+            130,
+            260,
+            60
+          ]
+        }
+      ]
+    }
+  ]
+}

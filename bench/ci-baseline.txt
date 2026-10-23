@@ -1,0 +1,7 @@
+# Mean wall time, in milliseconds, of the 20,000-screen `opencrs check` on a
+# GitHub-hosted ubuntu-latest runner. The bench job in .github/workflows/cli.yml
+# fails when a run takes more than 3x this.
+#
+# Measured on the first CI run (2026-10-24: 1075 ms). Runners vary, so update
+# it from a recent run's "per-screen check: N ms" if the gate flakes.
+1075

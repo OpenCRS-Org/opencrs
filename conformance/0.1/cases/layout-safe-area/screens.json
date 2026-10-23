@@ -1,0 +1,77 @@
+{
+  "opencrs": "0.1",
+  "publisher": "conf.example",
+  "updated_at": "2026-10-20T09:00:00+11:00",
+  "expires_at": "2027-06-30T00:00:00+10:00",
+  "networks": [
+    {
+      "id": "n",
+      "name": "Layout network",
+      "formats": [
+        {
+          "id": "f",
+          "pixels": [
+            1080,
+            1920
+          ],
+          "media": {
+            "static": [
+              "image/png"
+            ]
+          },
+          "safe_area": {
+            "top": 120,
+            "right": 60,
+            "bottom": 160,
+            "left": 60
+          },
+          "blocked_regions": [
+            {
+              "name": "network-logo",
+              "rect_px": [
+                880,
+                120,
+                160,
+                80
+              ]
+            }
+          ]
+        }
+      ],
+      "screens": [
+        {
+          "id": "S1",
+          "format": "f"
+        },
+        {
+          "id": "S2",
+          "format": "f",
+          "overrides": {
+            "blocked_regions": [
+              {
+                "name": "column",
+                "rect_px": [
+                  0,
+                  1700,
+                  300,
+                  220
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "S3",
+          "format": "f",
+          "overrides": {
+            "remove": {
+              "blocked_regions": [
+                "network-logo"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

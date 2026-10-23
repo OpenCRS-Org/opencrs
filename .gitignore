@@ -1,0 +1,11 @@
+/opencrs
+.DS_Store
+
+# Rust
+target/
+.playwright-mcp/
+CLARIFICATIONS.md
+.claude/
+
+# Brainstorming companion
+.superpowers/

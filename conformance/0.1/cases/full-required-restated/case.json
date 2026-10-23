@@ -1,0 +1,48 @@
+{
+  "id": "full-required-restated",
+  "level": "full",
+  "spec": "Inheritance: a restated required element keeps the larger size and the overlap of position limits",
+  "description": "The network wants the legal line at 12 mm in the bottom 420 px; the venue restates it at 16 mm in the bottom 320 px. 20 px in the bottom band passes; 18 px is too small; a line at y 1550 is outside the overlap.",
+  "now": "2026-10-22T12:00:00+11:00",
+  "specs": [
+    "screens.json"
+  ],
+  "creative": "creative.json",
+  "expect": [
+    {
+      "file": "ok.png",
+      "target": "conf.example/n/screen/S1",
+      "result": "pass",
+      "checks": []
+    },
+    {
+      "file": "small.png",
+      "target": "conf.example/n/screen/S1",
+      "result": "fail",
+      "checks": [
+        {
+          "code": "CRS-REQUIRED-ELEMENT",
+          "severity": "error",
+          "element": "legal"
+        },
+        {
+          "code": "CRS-LEGIBILITY",
+          "severity": "warning",
+          "element": "legal"
+        }
+      ]
+    },
+    {
+      "file": "high.png",
+      "target": "conf.example/n/screen/S1",
+      "result": "fail",
+      "checks": [
+        {
+          "code": "CRS-REQUIRED-ELEMENT",
+          "severity": "error",
+          "element": "legal"
+        }
+      ]
+    }
+  ]
+}

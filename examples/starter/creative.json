@@ -1,0 +1,13 @@
+{
+  "$schema": "https://opencrs.dev/schema/0.1/creative.schema.json",
+  "opencrs": "0.1",
+  "campaign": { "id": "your-campaign", "advertiser": "Your Advertiser" },
+  "files": [
+    {
+      "file": "portrait.jpg",
+      "media_type": "image/jpeg",
+      "pixels": [1080, 1920],
+      "targets": ["your-domain.example/main/portrait-1080"]
+    }
+  ]
+}

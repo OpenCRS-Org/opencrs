@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://opencrs.dev/schema/0.1/index.schema.json",
+  "title": "OpenCRS 0.1 publisher index",
+  "description": "Served at https://<publisher-domain>/.well-known/opencrs.json. Lists the screens.json documents the publisher vouches for.",
+  "type": "object",
+  "required": ["opencrs", "publisher", "documents"],
+  "properties": {
+    "opencrs": { "$ref": "common.schema.json#/$defs/version" },
+    "publisher": {
+      "type": "object",
+      "required": ["id", "name"],
+      "properties": {
+        "id": { "$ref": "common.schema.json#/$defs/domain", "description": "The publisher's domain; must match the host serving this index." },
+        "name": { "type": "string", "minLength": 1 },
+        "contact": { "type": "string" },
+        "ext": { "$ref": "common.schema.json#/$defs/ext" }
+      }
+    },
+    "documents": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["url"],
+        "properties": {
+          "url": { "type": "string", "pattern": "^https://" },
+          "network": { "$ref": "common.schema.json#/$defs/id" },
+          "visibility": { "enum": ["public", "partner"], "default": "public" },
+          "ext": { "$ref": "common.schema.json#/$defs/ext" }
+        }
+      }
+    },
+    "delegates": {
+      "description": "Other publishers whose documents are accepted for this publisher's screens, as with ads.txt and sellers.json.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["domain"],
+        "properties": {
+          "domain": { "$ref": "common.schema.json#/$defs/domain" },
+          "scope": { "type": "string", "description": "What the delegate may describe, e.g. network:retail. Omit for everything." },
+          "ext": { "$ref": "common.schema.json#/$defs/ext" }
+        }
+      }
+    },
+    "changes_url": { "type": "string", "pattern": "^https://", "description": "Optional feed of recent changes." },
+    "keys": {
+      "description": "Public keys (JWK) for verifying detached JSON Web Signatures over documents.",
+      "type": "array",
+      "items": { "type": "object", "required": ["kty"] }
+    },
+    "ext": { "$ref": "common.schema.json#/$defs/ext" }
+  }
+}
