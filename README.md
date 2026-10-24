@@ -1,139 +1,268 @@
-# OpenCRS
+<p align="center">
+  <a href="https://opencrs.dev">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset=".github/assets/opencrs-mark-on-dark.svg">
+      <img src=".github/assets/opencrs-mark.svg" alt="OpenCRS" width="96" height="96">
+    </picture>
+  </a>
+</p>
 
-The Open Creative Requirements Specification: one machine-readable file, on a publisher's own domain, that says what creative needs in order to work on each of its digital screens.
+<h1 align="center">OpenCRS</h1>
 
-This repository holds the [0.1 specification](OpenCRS%200.1%20Specification.md), its JSON Schemas, worked examples, and a reference validator written in Rust, with a Go package that runs the validator's WebAssembly build.
+<p align="center">
+  <b>Every screen, described once. Every creative, right first time.</b><br>
+  The Open Creative Requirements Specification: one machine-readable file, on a publisher's own domain,<br>
+  that says what creative needs in order to work on each of its digital screens.
+</p>
 
-| Path | What's in it |
-| --- | --- |
-| `schema/0.1/` | JSON Schemas (Draft 2020-12): `index`, `screens`, `creative`, `report`, `rule-pack`, plus `common` definitions |
-| `examples/harbourline/` | The spec's complete example (verbatim), an index, a creative manifest with two PNGs, and the reports the validator writes for them |
-| `crates/opencrs/` | Rust library: schema validation, inheritance resolution, file probing, checks, reports, and discovery and trust (fetching indexes and documents, delegation, partner merging) |
-| `rulepacks/` | Regulatory rule packs (`<name>@<version>.json`), embedded in the validator |
-| `conformance/` | The conformance suite: test cases any validator can run to show it meets Core, Layout or Full |
-| `crates/opencrs-cli/` | The `opencrs` command-line tool |
-| `crates/opencrs-wasm/` | The validator compiled to WebAssembly, for the online checker at [opencrs.dev/check](https://opencrs.dev/check/) |
-| `bindings/` | Python and npm packages over the Rust library |
-| `js/` | Loader, conformance adapter and smoke test for the WebAssembly build |
-| `opencrs.go` | The Go package (`opencrs.dev/go`): the validator's WebAssembly build (`opencrs.wasm`, embedded) behind a Go API |
+<p align="center">
+  <a href="https://github.com/OpenCRS-Org/opencrs/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/OpenCRS-Org/opencrs?color=5B4CF0&label=release"></a>
+  <a href="https://opencrs.dev/spec/0.1/"><img alt="Spec 0.1 draft" src="https://img.shields.io/badge/spec-0.1%20draft-5B4CF0"></a>
+  <a href="conformance/"><img alt="Conformance: Full, 47 of 47" src="https://img.shields.io/badge/conformance-Full%20%C2%B7%2047%2F47-2ea44f"></a>
+  <a href="https://github.com/OpenCRS-Org/opencrs/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/OpenCRS-Org/opencrs/actions/workflows/ci.yml/badge.svg"></a>
+  <br>
+  <a href="https://www.npmjs.com/package/@opencrs/cli"><img alt="npm" src="https://img.shields.io/npm/v/@opencrs/cli?logo=npm&label=npx%20%40opencrs%2Fcli&color=121216"></a>
+  <a href="https://github.com/OpenCRS-Org/homebrew-tap"><img alt="Homebrew" src="https://img.shields.io/badge/brew-opencrs--org%2Ftap-121216?logo=homebrew&logoColor=white"></a>
+  <a href="https://github.com/OpenCRS-Org/opencrs/pkgs/container/opencrs"><img alt="Container" src="https://img.shields.io/badge/ghcr.io-opencrs--org%2Fopencrs-121216?logo=docker&logoColor=white"></a>
+  <a href="https://pkg.go.dev/opencrs.dev/go"><img alt="Go reference" src="https://pkg.go.dev/badge/opencrs.dev/go.svg"></a>
+  <br>
+  <img alt="Rust 1.95" src="https://img.shields.io/badge/rust-1.95-121216?logo=rust&logoColor=white">
+  <img alt="WebAssembly" src="https://img.shields.io/badge/webassembly-zero%20imports-654FF0?logo=webassembly&logoColor=white">
+  <a href="LICENSE"><img alt="Code: Apache 2.0" src="https://img.shields.io/badge/code-Apache%202.0-blue"></a>
+  <a href="LICENSE-SPEC"><img alt="Spec: CC BY 4.0" src="https://img.shields.io/badge/spec-CC%20BY%204.0-blue"></a>
+</p>
 
-## Install
+<p align="center">
+  <a href="https://opencrs.dev/spec/0.1/"><b>Read the spec</b></a> ·
+  <a href="https://opencrs.dev/check/"><b>Try the online checker</b></a> ·
+  <a href="https://opencrs.dev/examples/"><b>Example files</b></a> ·
+  <a href="https://github.com/OpenCRS-Org/opencrs/issues"><b>Comment on the draft</b></a>
+</p>
 
-```sh
-brew install opencrs-org/tap/opencrs                                  # macOS and Linux
-scoop bucket add opencrs https://github.com/OpenCRS-Org/scoop-bucket  # Windows
-scoop install opencrs
-npx @opencrs/cli --help                                               # anywhere with Node.js
-docker run --rm -v "$PWD:/work" ghcr.io/opencrs-org/opencrs --help    # container
+---
+
+A media owner's spec sheet is a PDF. Every agency, studio and tool reads it by eye, and creative still comes back wrong: the logo sits under the screen's own branding, the legal line is too small to read from the street, the video is two seconds too long. OpenCRS turns the spec sheet into data that a publisher hosts once and every tool can check against.
+
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'primaryColor':'#F1EFFE','primaryBorderColor':'#5B4CF0','primaryTextColor':'#121216','lineColor':'#6B6B76','clusterBkg':'#F7F7F4','clusterBorder':'#D9D9E0','edgeLabelBackground':'#FFFFFF','fontFamily':'Inter, system-ui, sans-serif'}}}%%
+flowchart LR
+    subgraph P["Publisher (media owner)"]
+        direction TB
+        IDX["<b>index</b><br/>/.well-known/opencrs.json"]
+        SCR["<b>screens.json</b><br/>formats · screens · safe areas<br/>viewing distances · rules"]
+        IDX --> SCR
+    end
+    subgraph C["Creative (agency, studio, tool)"]
+        direction TB
+        MAN["<b>creative.json</b><br/>which file is for<br/>which format or screen"]
+        FILES["PNG · JPEG · MP4"]
+        MAN --> FILES
+    end
+    RP[("<b>rule packs</b><br/>state signage rules")]
+    V{{"opencrs check"}}
+    SCR -- "fetched and trusted<br/>by domain" --> V
+    MAN --> V
+    FILES -- "pixels, bytes, duration<br/>read from the file" --> V
+    RP --> V
+    V --> R["Report per file and screen<br/><b>pass · warn · fail</b>"]
+
+    classDef accent fill:#5B4CF0,stroke:#5B4CF0,color:#fff
+    class V accent
 ```
 
-Or the installer script, which puts `opencrs` in `~/.cargo/bin`:
+## See it
 
-```sh
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/OpenCRS-Org/opencrs/releases/latest/download/opencrs-cli-installer.sh | sh
-```
-
-Each [release](https://github.com/OpenCRS-Org/opencrs/releases) also has archives for macOS, Linux (glibc and static musl) and Windows, with checksums and build attestations.
-
-## The validator
-
-```sh
-cargo build --release -p opencrs-cli    # target/release/opencrs: a single binary; no runtime needed
-```
-
-Run `opencrs --help` for the commands and `opencrs COMMAND --help` for a command's options. The single-dash spellings of earlier versions (`-spec`, `-json`, `-allow-local-http`) still work.
-
-A man page (`man/opencrs.1`) and shell completions (`completions/`) are generated from the command definition and included in release archives; the Homebrew formula installs them. `opencrs completion bash|zsh|fish|powershell` prints a completion script. After changing the command line, run `cargo xtask generate` and commit the result; a test fails if they are out of date.
-
-**Check documents against the schema** (add `--allow-local-http` to test an index that points at `http://localhost`). For a `screens.json`, this also reports screens that name a missing format or venue (`CRS-REFERENCE`) and rules that inheritance has made impossible to meet (`CRS-RULE-CONFLICT`).
-
-```sh
-opencrs schema examples/harbourline/retail.screens.json examples/harbourline/creative.json
-```
-
-**Check creative against a publisher's requirements**
-
-```sh
-opencrs check --spec examples/harbourline/retail.screens.json examples/harbourline/creative.json
-```
-
-```
+```console
+$ opencrs check --spec retail.screens.json creative.json
 lunch-portrait.png → harbourline.example/retail/portrait-totem-75: FAIL
   warning     CRS-LEGIBILITY         Legal text is 18 px; 16 px minimum at 2 m, ratio 150. Passes with little margin  [HC-L1-001]
   warning     CRS-LEGIBILITY         Headline text is 92 px; 77 px minimum at 10 m, ratio 150. Passes with little margin  [HC-L1-002]
   error       CRS-LEGIBILITY         Legal text is 18 px; 23 px minimum at 3 m, ratio 150  [HC-L1-002]
+
+lunch-portrait-logo-right.png → harbourline.example/retail/screen/HC-L1-001: FAIL
+  error       CRS-SAFE-AREA          Logo extends into the safe-area margin (top 120 px)
+  error       CRS-BLOCKED-REGION     Logo overlaps the network-logo area
 ```
 
-The same file passes on one totem and fails on its twin, because the second is seen from further away. That is the point of describing screens as people see them.
+The same file passes on one totem and fails on its twin, because the second is seen from further away. That is the point of describing screens the way people see them. Try these files in the [online checker](https://opencrs.dev/check/?example=harbourline); nothing is uploaded.
 
-The validator reads each file's type, pixel size, byte size and SHA-256 (and duration, for MP4) from the file itself. Values the manifest declares are used only when the file isn't available (`--no-files`). Use `--json` to get a JSON array of reports, each in the spec's report format, and `--spec` more than once to check against several publishers. Exit status is 1 if any report fails.
+## Install
 
-**Discover a publisher's documents and check which to trust**
+| Platform | Command |
+| --- | --- |
+| **macOS, Linux** | `brew install opencrs-org/tap/opencrs` &nbsp;(with the man page and shell completions) |
+| **Windows** | `scoop bucket add opencrs https://github.com/OpenCRS-Org/scoop-bucket` then `scoop install opencrs` |
+| **Node.js** | `npx @opencrs/cli --help` |
+| **Container** | `docker run --rm -v "$PWD:/work" ghcr.io/opencrs-org/opencrs --help` |
+| **Script** | `curl --proto '=https' --tlsv1.2 -LsSf https://github.com/OpenCRS-Org/opencrs/releases/latest/download/opencrs-cli-installer.sh \| sh` |
+| **Go** | `go get opencrs.dev/go` |
+| **Source** | `cargo build --release -p opencrs-cli` &nbsp;(a single binary, no runtime) |
+
+Every [release](https://github.com/OpenCRS-Org/opencrs/releases) has archives for macOS, Linux (glibc and static musl) and Windows, on Intel and Arm, with checksums and build attestations: `gh attestation verify $(which opencrs) --repo OpenCRS-Org/opencrs`.
+
+## Commands
+
+| Command | What it does |
+| --- | --- |
+| `opencrs check --spec SCREENS CREATIVE` | Checks each file a `creative.json` lists against every screen it targets. Repeat `--spec` for several publishers; `--json` prints reports in the spec's format. |
+| `opencrs schema FILE…` | Checks documents against the JSON Schemas, plus screens that name a missing format (`CRS-REFERENCE`) and rules inheritance has made impossible (`CRS-RULE-CONFLICT`). |
+| `opencrs resolve SCREENS REF` | Shows what one format or screen requires after inheritance, with minimum text sizes in mm and px and the word limit. |
+| `opencrs fetch DOMAIN` | Reads a publisher's index, fetches its documents, follows delegates, and says which to trust and why. `--output DIR` saves the trusted ones. |
+| `opencrs conformance` | Runs the conformance suite against this validator, or against any other with `--cmd`. |
+| `opencrs completion SHELL` | Prints completions for bash, zsh, fish or PowerShell. |
+
+`opencrs COMMAND --help` has examples for each, and `man opencrs` has the lot. Exit status is 0 when everything passes, 1 when something fails, and 2 for a usage or read error.
+
+<details>
+<summary><b>What gets checked</b></summary>
+
+<br>
+
+The validator reads each file's type, pixel size, byte size and SHA-256 (and duration, for MP4) from the file itself. Values the manifest declares are used only when the file isn't there (`--no-files`).
+
+| Level | A publisher provides | The validator checks | Cases |
+| --- | --- | --- | --- |
+| **Core** | Formats with `pixels` and `media`, screens, an index | `CRS-PIXELS` `CRS-MEDIA-TYPE` `CRS-FILE-SIZE` `CRS-DURATION` `CRS-SPEC-STALE` | 16 |
+| **Layout** | Core, plus safe areas, blocked regions and segments | Core, plus `CRS-SAFE-AREA` `CRS-BLOCKED-REGION` | 4 |
+| **Full** | Layout, plus physical size, viewing context and rules | Everything: `CRS-LEGIBILITY` `CRS-MAX-WORDS` `CRS-REQUIRED-ELEMENT` `CRS-CATEGORY` `CRS-MOTION` and the rule packs | 27 |
+
+Not yet implemented: segment checks for composite surfaces, and audio, codec and colour-space checks.
+
+</details>
+
+<details>
+<summary><b>Regulatory rule packs</b></summary>
+
+<br>
+
+Rule packs are built into the validator (and the browser build) from [`rulepacks/`](rulepacks/). A screen that lists one, such as `"rule_packs": ["au-nsw-transport-corridor@2017-11"]`, is checked against it with no extra flags.
+
+- **Creative rules** give `CRS-MOTION-PROHIBITED`, `CRS-TRAFFIC-DEVICE`, `CRS-GLANCE-TEXT` and `CRS-SEQUENCING`.
+- **`CRS-TRAFFIC-DEVICE` needs a person:** whether a file looks like a traffic sign is `not_checked` until the manifest attests that someone reviewed that exact file (by SHA-256). Then it's `info`, naming the reviewer, and the file can pass.
+- **Playback rules** (dwell, transition, failure state, luminance, school zones) appear as `CRS-PLAYBACK` info lines for the screen's speed and lighting zone, and never fail creative.
+- A pack the validator doesn't know is reported as `CRS-RULE-PACK`, not checked.
+
+| Pack | Status |
+| --- | --- |
+| `au-nsw-transport-corridor@2017-11` | draft |
+| `au-qld-tmr-roadside-advertising@2022-12` | draft |
+| `au-sa-dit-advertising-signs@2014-08` | draft |
+| `au-vic-dtp-illuminated-signage@2023-10` | draft |
+| `au-wa-mrwa-digital-signs@2025-05` | draft |
+| `au-tas-spp-signs-code@2024-06` | unverified, until amendments after its June 2024 edition are checked |
+
+Each is checked against the state's own guidelines or planning rules, with page or section citations, and its `notes` say what it leaves out. The NT and the ACT have no territory-wide rule for digital signs, so they have no pack.
+
+</details>
+
+<details>
+<summary><b>Fetching and trust</b></summary>
+
+<br>
 
 ```sh
-opencrs fetch harbourline.example                       # read the index, fetch every document, follow delegates
-opencrs fetch https://specs.cms-a.example/harbourline/airports.screens.json   # does its publisher vouch for this exact URL?
-opencrs fetch --token harbourline.example=TOKEN --output specs harbourline.example         # include partner documents and save
+opencrs fetch harbourline.example                                     # the index, every document, delegates
+opencrs fetch https://specs.cms-a.example/harbourline/airports.screens.json   # does its publisher vouch for this URL?
+opencrs fetch --token harbourline.example=TOKEN --output specs harbourline.example   # partner documents too, saved
 ```
 
-Each document is marked `trusted`, `expired`, `rejected`, `skipped` (a partner document without credentials) or `failed`, with the reason. `--output` saves trusted documents byte-for-byte as served, ready for `opencrs check -spec`. When partner documents are included, it also writes a `merged.screens.json` and lists any conflicts. Use `--allow-local-http` to test an index on `http://localhost` before deploying it.
+Each document is marked `trusted`, `expired`, `rejected`, `skipped` (a partner document without credentials) or `failed`, with the reason. `--output` saves trusted documents byte for byte, ready for `opencrs check --spec`; with partner documents it also writes a `merged.screens.json` and lists any conflicts.
 
-`fetch` refuses to connect to loopback, private, link-local, shared (CGNAT), multicast, documentation and other internal addresses, checked after DNS resolution and again on every redirect, so an index can't aim it at a machine's own services or its network. `-allow-local-http` is the opt-in for local testing: it allows `http://` and connections to `localhost`, `127.0.0.1` and `[::1]` only. `fetch` connects directly and ignores `HTTP(S)_PROXY`.
+`fetch` refuses loopback, private, link-local, CGNAT, multicast, documentation and other internal addresses, checked after DNS resolution and again on every redirect. `--allow-local-http` is the opt-in for testing an index on `localhost` before you deploy it. `fetch` connects directly and ignores `HTTP(S)_PROXY`. Each document is at most 50 MiB, an index may list at most 1,000 documents and 1,000 delegates, and one run reads at most 512 MiB.
 
-Limits: each document is at most 50 MiB (the spec's limit), an index may list at most 1,000 documents and 1,000 delegates, and one run reads at most 512 MiB in all; documents past that are marked `failed`.
+</details>
 
-**See what a screen actually requires after inheritance**
+## One validator, everywhere
+
+The checks are written once, in Rust, and every other way of running them uses that same code.
+
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'primaryColor':'#F1EFFE','primaryBorderColor':'#5B4CF0','primaryTextColor':'#121216','lineColor':'#6B6B76','clusterBkg':'#F7F7F4','clusterBorder':'#D9D9E0','edgeLabelBackground':'#FFFFFF','fontFamily':'Inter, system-ui, sans-serif'}}}%%
+flowchart TB
+    CORE["<b>crates/opencrs</b><br/>schemas · inheritance<br/>file probing · checks<br/>reports · trust"]
+    CORE --> CLI["<b>opencrs</b> CLI<br/><i>crates/opencrs-cli</i>"]
+    CORE --> WASM["<b>opencrs.wasm</b><br/><i>crates/opencrs-wasm</i>"]
+    CORE --> NPM["npm binding<br/><i>bindings/npm</i>"]
+    CORE --> PY["Python binding<br/><i>bindings/python</i>"]
+    WASM --> WEB["Online checker<br/><i>opencrs.dev/check</i>"]
+    WASM --> GO["Go package<br/><i>opencrs.dev/go</i>"]
+    WASM --> JS["JS loader<br/><i>js/</i>"]
+    CLI --> CH["Homebrew · Scoop · npm<br/>container · installers"]
+
+    classDef accent fill:#5B4CF0,stroke:#5B4CF0,color:#fff
+    class CORE accent
+```
+
+**From Go**, the validator's WebAssembly build is embedded and run with [wazero](https://wazero.io), so there's no cgo:
+
+```go
+import opencrs "opencrs.dev/go"
+
+root, err := os.OpenRoot("campaign")
+if err != nil { /* … */ }
+res, err := opencrs.CheckDir(root.FS(), []string{"retail.screens.json"}, "creative.json", time.Now())
+if err != nil { /* … */ }
+for _, r := range res.Reports {
+    fmt.Println(r.File, r.Target, r.Result) // pass, warn, fail or incomplete
+}
+```
+
+**In the browser**, the [online checker](https://opencrs.dev/check/) runs the same module, so creative files never leave the machine. The npm (`@opencrs/opencrs`) and Python (`opencrs`) bindings are built and tested here, and not yet published.
+
+## What's here
+
+| Path | What's in it |
+| --- | --- |
+| [`OpenCRS 0.1 Specification.md`](OpenCRS%200.1%20Specification.md) | The specification |
+| [`schema/0.1/`](schema/0.1/) | JSON Schemas (Draft 2020-12) for `index`, `screens`, `creative`, `report` and `rule-pack`, served at their `$id` on opencrs.dev |
+| [`examples/`](examples/) | The spec's complete Harbourline example, verbatim, with the reports the validator writes, and starter files |
+| [`conformance/`](conformance/) | 47 cases any validator can run to show it meets Core, Layout or Full ([how to write an adapter](conformance/README.md)) |
+| [`rulepacks/`](rulepacks/) | Regulatory rule packs, embedded in the validator |
+| [`crates/`](crates/) | The Rust library, CLI and WebAssembly module |
+| [`bindings/`](bindings/) | npm and Python packages over the Rust library |
+| [`opencrs.go`](opencrs.go) | The Go package |
+
+## Development
 
 ```sh
-opencrs resolve examples/harbourline/retail.screens.json harbourline.example/retail/screen/HC-L1-002
+cargo test --workspace       # the Rust library and CLI
+go test -race .              # the Go package
+cargo xtask generate         # after changing the command line: man page and completions
 ```
 
-This prints the merged format, rules and derived values: minimum key and legal cap heights in mm and px, and the word limit.
+The tests use the spec's own numbers as acceptance criteria: the worked legibility example (46 px and 16 px), text just below a minimum failing rather than rounding up to pass, restrictions a lower level can't loosen, the 8-word limit from a 4-second dwell, larger text on the further totem, and every JSON example in the spec passing its schema.
 
-**Checks implemented:** `CRS-PIXELS`, `CRS-MEDIA-TYPE`, `CRS-FILE-SIZE`, `CRS-DURATION`, `CRS-SAFE-AREA`, `CRS-BLOCKED-REGION`, `CRS-LEGIBILITY`, `CRS-MAX-WORDS`, `CRS-REQUIRED-ELEMENT`, `CRS-CATEGORY`, `CRS-MOTION` and `CRS-SPEC-STALE`. That covers all three conformance levels (Core, Layout and Full). Not yet implemented: segment checks for composite surfaces, and audio, codec and colour-space checks.
+<details>
+<summary><b>Building the WebAssembly module</b></summary>
 
-**Regulatory rule packs** are built into the validator (and the browser build) from `rulepacks/`, so a screen that references one, such as `"rule_packs": ["au-nsw-transport-corridor@2017-11"]`, is checked against it with no extra flags. Creative rules give `CRS-MOTION-PROHIBITED`, `CRS-TRAFFIC-DEVICE` (always needs visual review), `CRS-GLANCE-TEXT` and `CRS-SEQUENCING`; playback rules (dwell, transition, failure state, luminance, school zones) appear as `CRS-PLAYBACK` info lines chosen for the screen's speed and lighting zone, and never fail creative. A pack the validator doesn't know is reported `CRS-RULE-PACK` not checked. Packs for NSW, Queensland, WA, SA, Victoria and Tasmania are each checked against the state's own guidelines or planning rules, with page or section citations; all are `draft` except Tasmania's, which stays `unverified` until amendments made after its June 2024 edition are checked. Each pack's `notes` say what it leaves out. The NT and the ACT have no territory-wide rule for digital signs, so they have no pack. Validate a pack with `opencrs schema rulepacks/<pack>.json`.
-
-**Run the conformance suite**
-
-```sh
-opencrs conformance                       # the Rust validator, at the Full level
-opencrs conformance --cmd ./my-adapter.sh  # any other validator, through an adapter
-```
-
-See [`conformance/README.md`](conformance/README.md) for the case format, the matching rules and how to write an adapter.
-
-## The browser validator
-
-`crates/opencrs-wasm` compiles the validator to WebAssembly. The online checker at [opencrs.dev/check](https://opencrs.dev/check/) runs it in the browser, so creative files are never uploaded; its page lives in the site's repository, OpenCRS-Org/opencrs.dev.
+<br>
 
 ```sh
 scripts/build-wasm.sh /tmp/wasm      # needs binaryen's wasm-opt; writes opencrs.wasm and opencrs.js
 node js/smoke.mjs /tmp/wasm          # the module must behave like the CLI
 ```
 
-The committed `opencrs.wasm` at the repository root is the build of these sources and is what the Go package embeds. rustc's output differs from one host to another, so it is built in a pinned linux/amd64 container (Rust 1.95.0, binaryen 133) with `scripts/build-wasm-docker.sh OUT_DIR` (needs Docker), and CI rebuilds it there and compares byte for byte. A build with `scripts/build-wasm.sh` on your own machine is for testing; commit the container's.
+The committed `opencrs.wasm` is what the Go package embeds. rustc's output differs between hosts, so it's built in a pinned linux/amd64 container (Rust 1.95.0, binaryen 133) with `scripts/build-wasm-docker.sh OUT_DIR`, and CI rebuilds it there and compares byte for byte. Build on your own machine to test; commit the container's build.
 
-## Development
+</details>
 
-```sh
-cargo test --workspace     # the Rust library and CLI
-go test -race .            # the Go package
-```
+<details>
+<summary><b>Checking a creative package from someone else</b></summary>
 
-The tests use the spec's own numbers as acceptance criteria: the worked legibility example (46 px and 16 px), text just below a minimum failing rather than rounding up to pass, restrictions that a lower level can't loosen, the 8-word limit from a 4-second dwell, larger text on the further totem, and every JSON example in the spec passing its schema (`crates/opencrs/tests/spec_examples.rs`), with the complete example identical to the copy in `examples/`.
+<br>
 
-The validator used to be written in Go. The last commit that had it is `6784da9`; `crates/opencrs-cli/tests/differential/README.md` explains how to build it and compare it with the Rust CLI.
+Every host (the CLI, the npm and Python bindings, and the Go package's `CheckDir`) reads only the files the manifest names, refuses names with `..` or an absolute path, follows symlinks only while they stay inside the package directory, and probes only regular files. In Go, pass `root.FS()` from `os.OpenRoot(dir)` rather than `os.DirFS(dir)`, so the opens themselves are confined too.
+
+Two limits remain. A hard link inside the package can't be told from an ordinary file, so unpack untrusted archives without hard links (most extractors have an option, and Linux's `protected_hardlinks` blocks links to other users' files). And a concurrent writer to the directory could swap in a symlink between the check and the open, so check a copy no one else can write to.
+
+</details>
+
+The validator was first written in Go. The [differential tests](crates/opencrs-cli/tests/differential/README.md) compare this CLI with that version, output for output.
+
+## Contributing
+
+OpenCRS is a draft, and it gets better with real spec sheets and real creative. [Open an issue](https://github.com/OpenCRS-Org/opencrs/issues) with what doesn't fit, or see [CONTRIBUTING.md](CONTRIBUTING.md) for proposals and pull requests. Commits are signed off under the [Developer Certificate of Origin](DCO). To report a security problem, see [SECURITY.md](SECURITY.md).
 
 ## Licence
 
-- **The specification** (`OpenCRS 0.1 Specification.md`): [CC BY 4.0](LICENSE-SPEC).
-- **Everything else**, including the JSON Schemas, examples and code: [Apache 2.0](LICENSE).
-
-Anyone can implement OpenCRS, including competitors, as the spec's governance section intends.
-
-To contribute, see [CONTRIBUTING.md](CONTRIBUTING.md): commits are signed off under the [Developer Certificate of Origin](DCO). To report a security problem, see [SECURITY.md](SECURITY.md).
-
-The Go module path is `opencrs.dev/go`, a vanity import path: `opencrs.dev` tells the `go` tool that the code lives at `github.com/OpenCRS-Org/opencrs`, so hosting can move without breaking imports. Add it with `go get opencrs.dev/go`.
-
-**Checking a creative package from someone else.** Every host (the CLI, the npm and Python bindings, and the Go package's `CheckDir`) reads only the files the manifest names, refuses names with `..` or an absolute path, follows symlinks only while they stay inside the package directory, and probes only regular files. In Go, pass `root.FS()` from `os.OpenRoot(dir)` rather than `os.DirFS(dir)`, so the opens themselves are confined too. Two limits remain: a hard link inside the package can't be told from an ordinary file by any host, so unpack untrusted archives without hard links (most extractors have an option; Linux's `protected_hardlinks` also blocks links to other users' files); and a concurrent writer to the directory could swap in a symlink between the check and the open, so check a copy no one else can write to.
+The specification is [CC BY 4.0](LICENSE-SPEC). Everything else, including the JSON Schemas, examples and code, is [Apache 2.0](LICENSE). Anyone can implement OpenCRS, including competitors, as the spec's governance section intends.
