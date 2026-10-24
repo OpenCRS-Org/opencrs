@@ -218,6 +218,7 @@ def test_check_dir_rejects_symlinks_out_of_the_directory_and_fifos(tmp_path):
         opencrs.check_dir(tmp_path, [spec()], manifest_naming("gone"), NOW)
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Unix devices and FIFOs")
 def test_probe_refuses_devices_and_fifos(tmp_path):
     import os
 
