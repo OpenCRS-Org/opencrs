@@ -50,7 +50,7 @@
       "screens": [
         {
           "id": "HC-L1-001", "format": "portrait-totem-75", "venue": "harbour-central",
-          "placement": { "environment": "indoor", "level": "L1", "zone": "food court", "mounted_height_mm": 0 },
+          "placement": { "environment": "indoor", "level": "L1", "zone": "food court", "mounted_height_mm": 0, "facing": "N" },
           "viewing": { "distance_m": [2, 6], "dwell_s": 4, "approach": "head-on", "light": "indoor" },
           "platform_ids": { "cms-a": "frame-4411" }
         },

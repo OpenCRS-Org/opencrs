@@ -172,3 +172,65 @@ fn fictional_host(h: &str) -> bool {
     ) || h == "example"
         || h.ends_with(".example")
 }
+
+// The worked examples in the spec's prose must give what the library
+// computes, so a change to either shows up here.
+#[test]
+fn worked_examples_match_the_library() {
+    use opencrs::legibility::{DEFAULT_READING_RATE_WPS, TextClass};
+    use opencrs::packcheck::{DEFAULT_LEGIBILITY_RATIO, glance_at};
+    use opencrs::resolve::parse_ref;
+
+    let spec = String::from_utf8(read("OpenCRS 0.1 Specification.md")).unwrap();
+    let says = |s: String| assert!(spec.contains(&s), "the spec should say {s:?}");
+
+    // Legibility: the totem seen from 2-6 m at ratio 150.
+    let doc = opencrs::decode_document(&read("examples/harbourline/retail.screens.json")).unwrap();
+    let r = parse_ref("harbourline.example/retail/screen/HC-L1-001").unwrap();
+    let reqs = doc.resolve(&r).unwrap();
+    let totem = &reqs[0];
+    let per_mm = totem.px_per_mm().unwrap();
+    let (key, ..) = totem.min_cap_height(TextClass::Key);
+    let (legal, ..) = totem.min_cap_height(TextClass::Legal);
+    says(format!(
+        "= {:.0} mm, which is {:.2} px, so {} px",
+        key.mm,
+        key.mm * per_mm,
+        key.px
+    ));
+    says(format!(
+        "= {:.1} mm, which is {:.1} px, so {} px",
+        legal.mm,
+        legal.mm * per_mm,
+        legal.px
+    ));
+
+    // Reading time: a 4-second dwell at the default rate.
+    says(format!(
+        "allows about {} words",
+        (4.0 * DEFAULT_READING_RATE_WPS) as i64
+    ));
+
+    // Reading at a glance: 80 km/h, seen from 20-150 m.
+    let v = 80.0 / 3.6;
+    let g = glance_at(80.0, [20.0, 150.0], DEFAULT_READING_RATE_WPS);
+    says(format!("at 80 km/h ({v:.2} m/s)"));
+    says(format!("takes {:.2} s to cross", 130.0 / v));
+    says(format!(
+        "at most {} words, read from 20 + {:.2} = {:.2} m",
+        g.words,
+        v * g.seconds,
+        g.read_from_m
+    ));
+    says(format!(
+        "at least {:.1} mm at ratio {}",
+        g.read_from_m * 1000.0 / DEFAULT_LEGIBILITY_RATIO,
+        DEFAULT_LEGIBILITY_RATIO
+    ));
+    // 100 km/h, seen from 10-50 m: the range is crossed before the glance ends.
+    let g = glance_at(100.0, [10.0, 50.0], DEFAULT_READING_RATE_WPS);
+    says(format!(
+        "takes only {:.2} s: at most {} words, read from {:.0} m",
+        g.seconds, g.words, g.read_from_m
+    ));
+}
