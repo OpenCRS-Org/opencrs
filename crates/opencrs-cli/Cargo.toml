@@ -1,6 +1,6 @@
 [package]
 name = "opencrs-cli"
-version = "0.1.0-rc.3"
+version = "0.1.0"
 description = "Tooling for OpenCRS, the Open Creative Requirements Specification"
 edition.workspace = true
 license.workspace = true
