@@ -1,5 +1,5 @@
-# Release channels that cargo-dist does not generate: npm (with trusted
-# publishing), Scoop, winget and the container image. Called from release.yml
+# Release channels that cargo-dist does not generate: Scoop, winget and the
+# container image (npm has its own workflow, npm.yml). Called from release.yml
 # (post-announce-jobs) once the GitHub release and the Homebrew publish have
 # succeeded. Runs only for version tags; nothing here triggers on its own.
 name: Release extras
@@ -18,50 +18,6 @@ env:
   OWNER_REPO: OpenCRS-Org/opencrs
 
 jobs:
-  # npm trusted publishing: no token. npm accepts the job's OIDC identity
-  # because @opencrs/cli has a trusted publisher configured for this repo and
-  # release.yml (the calling workflow), and publishes with provenance.
-  # dist's own publish-npm job has no id-token permission, so it's off
-  # (dist-workspace.toml); dist still builds the package.
-  npm:
-    name: Publish @opencrs/cli to npm
-    if: ${{ !fromJson(inputs.plan).announcement_is_prerelease || fromJson(inputs.plan).publish_prereleases }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-    env:
-      TAG: ${{ fromJson(inputs.plan).announcement_tag }}
-      PLAN: ${{ inputs.plan }}
-      GH_TOKEN: ${{ github.token }}
-    steps:
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
-        with:
-          node-version: 24
-          registry-url: https://registry.npmjs.org
-      # Trusted publishing needs npm 11.5.1 or later.
-      - name: Install npm 11.21.1
-        run: npm install -g npm@11.21.1
-      - name: Fetch the package dist built
-        run: |
-          set -euo pipefail
-          mkdir npm
-          for pkg in $(jq -r '.releases[].artifacts[] | select(endswith("-npm-package.tar.gz"))' <<< "$PLAN"); do
-            gh release download "$TAG" --repo "$OWNER_REPO" --dir npm --pattern "$pkg"
-          done
-          ls -l npm
-      - name: Publish
-        run: |
-          set -euo pipefail
-          # npm wants a dist-tag for a prerelease; "next" keeps "latest" on
-          # the newest stable version.
-          tag=latest
-          case "$TAG" in *-*) tag=next ;; esac
-          for pkg in npm/*-npm-package.tar.gz; do
-            # "./": without it npm reads npm/<file> as a GitHub user/repo.
-            npm publish --provenance --access public --tag "$tag" "./$pkg"
-          done
-
   scoop:
     name: Update the Scoop bucket
     runs-on: ubuntu-latest
