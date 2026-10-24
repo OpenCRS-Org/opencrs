@@ -58,7 +58,8 @@ jobs:
           tag=latest
           case "$TAG" in *-*) tag=next ;; esac
           for pkg in npm/*-npm-package.tar.gz; do
-            npm publish --provenance --access public --tag "$tag" "$pkg"
+            # "./": without it npm reads npm/<file> as a GitHub user/repo.
+            npm publish --provenance --access public --tag "$tag" "./$pkg"
           done
 
   scoop:
