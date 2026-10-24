@@ -67,14 +67,27 @@ pub fn go_error(op: &str, path: &str, e: &std::io::Error) -> String {
     format!("{op} {path}: {why}")
 }
 
-/// Go's `filepath.Clean`, for showing joined paths as Go does.
+/// Go's `filepath.Clean`, for showing joined paths as Go does. On Windows
+/// both `/` and `\` separate, and a drive (`C:`) or UNC prefix
+/// (`\\host\share`) is kept and can't be climbed out of. The result uses
+/// `/`, which Windows also accepts, so messages read the same everywhere.
 pub fn clean_path(p: &str) -> String {
+    clean(p, cfg!(windows))
+}
+
+fn clean(p: &str, windows: bool) -> String {
     if p.is_empty() {
         return ".".into();
     }
-    let rooted = p.starts_with('/');
+    let is_sep = |c: char| c == '/' || (windows && c == '\\');
+    let (vol, rest) = if windows {
+        split_volume(p, is_sep)
+    } else {
+        ("", p)
+    };
+    let rooted = rest.starts_with(is_sep);
     let mut out: Vec<&str> = Vec::new();
-    for part in p.split('/') {
+    for part in rest.split(is_sep) {
         match part {
             "" | "." => {}
             ".." => {
@@ -88,11 +101,36 @@ pub fn clean_path(p: &str) -> String {
         }
     }
     let s = out.join("/");
+    let vol = vol.replace('\\', "/");
     match (rooted, s.is_empty()) {
-        (true, _) => format!("/{s}"),
-        (false, true) => ".".into(),
-        _ => s,
+        (true, _) => format!("{vol}/{s}"),
+        (false, true) if vol.is_empty() => ".".into(),
+        (false, true) => vol,
+        _ => format!("{vol}{s}"),
     }
+}
+
+/// A Windows path's volume: `C:`, or `\\host\share` for a UNC path.
+fn split_volume(p: &str, is_sep: impl Fn(char) -> bool + Copy) -> (&str, &str) {
+    let b = p.as_bytes();
+    if b.len() >= 2 && b[1] == b':' && b[0].is_ascii_alphabetic() {
+        return p.split_at(2);
+    }
+    let mut chars = p.char_indices();
+    if let (Some((_, a)), Some((_, c))) = (chars.next(), chars.next())
+        && is_sep(a)
+        && is_sep(c)
+    {
+        // Host, then share: the volume ends at the separator after both.
+        let mut seps = p[2..].match_indices(is_sep).map(|(i, _)| i + 2);
+        if let Some(after_host) = seps.next() {
+            let end = seps.next().unwrap_or(p.len());
+            if after_host > 2 && end > after_host + 1 {
+                return p.split_at(end);
+            }
+        }
+    }
+    ("", p)
 }
 
 fn err(op: &'static str) -> impl Fn(std::io::Error) -> ProbeError {
@@ -296,6 +334,44 @@ pub fn check_dir_text(
     let mut res = run_check(specs, manifest, &found.probes, now)?;
     res["missing"] = serde_json::json!(found.missing);
     Ok(res)
+}
+
+#[cfg(test)]
+mod clean_tests {
+    use super::clean;
+
+    #[test]
+    fn cleans_like_go() {
+        for (p, want) in [
+            ("", "."),
+            ("a/./b/../c", "a/c"),
+            ("../../a", "../../a"),
+            ("/../a", "/a"),
+            ("a/..", "."),
+            ("a\\b", "a\\b"),
+        ] {
+            assert_eq!(clean(p, false), want, "{p:?}");
+        }
+    }
+
+    #[test]
+    fn cleans_windows_paths() {
+        for (p, want) in [
+            (
+                r"D:\a\crates\cli/../../conformance/0.1\cases",
+                "D:/a/conformance/0.1/cases",
+            ),
+            (r"C:\..\x", "C:/x"),
+            (r"C:..\x", "C:../x"),
+            ("C:", "C:"),
+            (r"a\b/..\c", "a/c"),
+            (r"\\host\share\x\..\..\y", "//host/share/y"),
+            (r"\\host\share", "//host/share"),
+            (r"\x\..\..", "/"),
+        ] {
+            assert_eq!(clean(p, true), want, "{p:?}");
+        }
+    }
 }
 
 #[cfg(all(test, unix))]
