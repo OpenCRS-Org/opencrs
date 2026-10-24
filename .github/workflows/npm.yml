@@ -1,0 +1,62 @@
+# Publishes @opencrs/cli to npm once a release has been built. npm trusted
+# publishing (no token): @opencrs/cli trusts this repository and this
+# workflow file, npm.yml. It's a workflow of its own, not a job in
+# release-extra.yml, because npm doesn't accept a publish from a called
+# workflow. Prereleases go under the "next" dist-tag, so "latest" stays on
+# the newest stable version.
+name: npm
+
+on:
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+  # To publish (or retry) a release that's already on GitHub.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag, like v0.1.0
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  publish:
+    name: Publish @opencrs/cli
+    # Only for a tag push whose release succeeded (Release also runs on pull
+    # requests, to plan).
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       startsWith(github.event.workflow_run.head_branch, 'v'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      TAG: ${{ inputs.tag || github.event.workflow_run.head_branch }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      # Trusted publishing needs npm 11.5.1 or later.
+      - name: Install npm 11.21.1
+        run: npm install -g npm@11.21.1
+      - name: Fetch the package dist built
+        run: |
+          set -euo pipefail
+          mkdir npm
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir npm --pattern '*-npm-package.tar.gz'
+          ls -l npm
+      - name: Publish
+        run: |
+          set -euo pipefail
+          tag=latest
+          case "$TAG" in *-*) tag=next ;; esac
+          for pkg in npm/*-npm-package.tar.gz; do
+            # "./": without it npm reads npm/<file> as a GitHub user/repo.
+            npm publish --provenance --access public --tag "$tag" "./$pkg"
+          done
