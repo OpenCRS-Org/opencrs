@@ -1,0 +1,5 @@
+# Check out text with LF everywhere: tests read the spec, rule packs and
+# expected outputs byte for byte, and Windows would otherwise get CRLF.
+* text=auto eol=lf
+*.wasm binary
+*.png binary
