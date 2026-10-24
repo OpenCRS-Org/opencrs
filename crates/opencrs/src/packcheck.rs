@@ -4,10 +4,10 @@
 //! The `Checker` itself lives in `checks.rs`; this file adds the pack checks
 //! to it.
 
-use crate::check::{CODE_RULE_PACK, Check, Severity};
+use crate::check::{Attested, CODE_RULE_PACK, Check, Severity};
 use crate::checks::{Checker, map_first_char, title};
 use crate::legibility::{DEFAULT_READING_RATE_WPS, TextClass, class_of, count_words, num};
-use crate::model::{CreativeFile, Placement};
+use crate::model::{Attestation, CreativeFile, Placement};
 use crate::resolve::Requirements;
 use crate::rulepack::{PACK_DRAFT, PACK_REVIEWED, RulePack, RulePacks, versions_of};
 use std::collections::BTreeSet;
@@ -17,6 +17,12 @@ pub const CODE_TRAFFIC_DEVICE: &str = "CRS-TRAFFIC-DEVICE";
 pub const CODE_GLANCE_TEXT: &str = "CRS-GLANCE-TEXT";
 pub const CODE_SEQUENCING: &str = "CRS-SEQUENCING";
 pub const CODE_PLAYBACK: &str = "CRS-PLAYBACK";
+pub const CODE_ATTESTATION: &str = "CRS-ATTESTATION";
+
+/// Checks only a person can judge. A validator reports them as not_checked
+/// unless the manifest has an attestation for the file, and only these can
+/// be attested.
+pub const HUMAN_REVIEW_CHECKS: [&str; 1] = [CODE_TRAFFIC_DEVICE];
 
 /// The longest a driver should look away from the road to read a sign: one
 /// glance. A working assumption, like the legibility ratio and reading rate,
@@ -189,6 +195,28 @@ impl<'a> Checker<'a> {
         self.playback(&packs);
     }
 
+    /// Attestations for checks the validator makes itself change nothing;
+    /// say so, so a reader doesn't think they counted.
+    pub(crate) fn unused_attestations(&mut self) {
+        let ignored: Vec<String> = self
+            .file
+            .attestations
+            .iter()
+            .filter(|a| !HUMAN_REVIEW_CHECKS.contains(&a.check.as_str()))
+            .map(|a| {
+                format!(
+                    "The attestation by {} for {} was ignored: only checks that need a person's judgement ({}) can be attested",
+                    a.by,
+                    a.check,
+                    HUMAN_REVIEW_CHECKS.join(", ")
+                )
+            })
+            .collect();
+        for msg in ignored {
+            self.report(CODE_ATTESTATION, Severity::Info, msg);
+        }
+    }
+
     /// The screen's known packs, without reporting the unknown ones.
     fn known_packs(&self) -> impl Iterator<Item = &'a RulePack> + use<'a> {
         let known: &'a RulePacks = self.rule_packs;
@@ -235,15 +263,57 @@ impl<'a> Checker<'a> {
 
     fn traffic_device(&mut self, packs: &[&RulePack]) {
         let refs = refs_where(packs, |p| p.creative.no_traffic_device_imagery);
-        if !refs.is_empty() {
-            self.report(
-                CODE_TRAFFIC_DEVICE,
-                Severity::NotChecked,
-                format!(
-                    "Nothing may look like a traffic sign or signal, or read as a driving instruction ({refs}); this needs visual review"
-                ),
-            );
+        if refs.is_empty() {
+            return;
         }
+        let rule = format!(
+            "Nothing may look like a traffic sign or signal, or read as a driving instruction ({refs})"
+        );
+        let c = self.attested(CODE_TRAFFIC_DEVICE, &rule);
+        self.add(c);
+    }
+
+    /// The finding for a check only a person can judge: info if an
+    /// attestation names this file's SHA-256, otherwise not_checked, saying
+    /// why any attestation didn't count.
+    fn attested(&self, code: &str, rule: &str) -> Check {
+        let mut found: Vec<&Attestation> = self
+            .file
+            .attestations
+            .iter()
+            .filter(|a| a.check == code)
+            .collect();
+        let sha = &self.facts.sha256;
+        if let Some(a) = found
+            .iter()
+            .find(|a| !sha.is_empty() && a.sha256.eq_ignore_ascii_case(sha))
+        {
+            let mut c = Check::new(
+                code,
+                Severity::Info,
+                format!("Reviewed by {} on {}: {}", a.by, a.date, lower_first(rule)),
+            );
+            c.source = self.facts.sha256_src.clone();
+            c.attestation = Some(Attested {
+                by: a.by.clone(),
+                date: a.date.clone(),
+                note: a.note.clone(),
+            });
+            return c;
+        }
+        let why = match found.pop() {
+            None => "this needs a person's review, recorded as an attestation in the manifest"
+                .to_string(),
+            Some(a) if sha.is_empty() => format!(
+                "the attestation by {} can't be matched to the file: neither the file nor the manifest gives its SHA-256",
+                a.by
+            ),
+            Some(a) => format!(
+                "the attestation by {} is for a different version of the file (SHA-256 {}, not {sha})",
+                a.by, a.sha256
+            ),
+        };
+        Check::new(code, Severity::NotChecked, format!("{rule}; {why}"))
     }
 
     fn sequencing(&mut self, packs: &[&RulePack]) {
@@ -756,11 +826,7 @@ mod tests {
         let reqs = d
             .resolve(&parse_ref(&screen_target(screen)).unwrap())
             .unwrap();
-        let facts = Facts {
-            media_type: f.media_type.clone(),
-            media_src: "manifest".into(),
-            ..Default::default()
-        };
+        let (facts, _) = crate::checks::gather_facts(f, None);
         let mut c = Checker {
             req: &reqs[0],
             file: f,
@@ -770,6 +836,7 @@ mod tests {
             rule_packs: packs,
             out: Vec::new(),
         };
+        c.unused_attestations();
         c.rule_packs_check();
         c.out
     }
@@ -907,13 +974,78 @@ mod tests {
     }
 
     #[test]
+    fn attestation_settles_traffic_device_for_that_file_only() {
+        let target = screen_target("HR-M4-001");
+        let sha = "ab".repeat(32);
+        let attest = |check: &str, hash: &str| Attestation {
+            check: check.into(),
+            by: "Sam Ortiz, Baycrest Studio".into(),
+            date: "2026-10-20".into(),
+            sha256: hash.into(),
+            note: String::new(),
+        };
+        let with = |sha256: &str, a: Vec<Attestation>| {
+            let mut f = billboard_file(&target);
+            f.sha256 = sha256.into();
+            f.attestations = a;
+            run(&f, "HR-M4-001")
+        };
+
+        // The attestation names this file: the check passes, as info.
+        let cs = with(&sha, vec![attest(CODE_TRAFFIC_DEVICE, &sha.to_uppercase())]);
+        assert!(find(&cs, CODE_TRAFFIC_DEVICE, Severity::NotChecked).is_empty());
+        let c = cs.iter().find(|c| c.code == CODE_TRAFFIC_DEVICE).unwrap();
+        assert_eq!(c.severity, Severity::Info);
+        assert!(c.message.starts_with("Reviewed by Sam Ortiz, Baycrest Studio on 2026-10-20: nothing may look like a traffic sign"), "{}", c.message);
+        assert_eq!(c.source, "manifest");
+        assert_eq!(
+            c.attestation.as_ref().unwrap().by,
+            "Sam Ortiz, Baycrest Studio"
+        );
+
+        // A different version of the file: still needs a person.
+        let other = "cd".repeat(32);
+        let cs = with(&other, vec![attest(CODE_TRAFFIC_DEVICE, &sha)]);
+        let msgs = find(&cs, CODE_TRAFFIC_DEVICE, Severity::NotChecked);
+        assert_eq!(msgs.len(), 1);
+        assert!(
+            msgs[0].contains("is for a different version of the file"),
+            "{}",
+            msgs[0]
+        );
+
+        // No hash to match against.
+        let cs = with("", vec![attest(CODE_TRAFFIC_DEVICE, &sha)]);
+        let msgs = find(&cs, CODE_TRAFFIC_DEVICE, Severity::NotChecked);
+        assert!(
+            msgs[0].contains("can't be matched to the file"),
+            "{}",
+            msgs[0]
+        );
+
+        // Checks the validator makes itself can't be attested away.
+        let cs = with(&sha, vec![attest("CRS-LEGIBILITY", &sha)]);
+        assert_eq!(
+            find(&cs, CODE_TRAFFIC_DEVICE, Severity::NotChecked).len(),
+            1
+        );
+        let msgs = find(&cs, CODE_ATTESTATION, Severity::Info);
+        assert_eq!(
+            msgs,
+            [
+                "The attestation by Sam Ortiz, Baycrest Studio for CRS-LEGIBILITY was ignored: only checks that need a person's judgement (CRS-TRAFFIC-DEVICE) can be attested"
+            ]
+        );
+    }
+
+    #[test]
     fn pack_creative_codes() {
         let target = screen_target("HR-M4-001");
         let cs = run(&billboard_file(&target), "HR-M4-001");
         assert_eq!(
             find(&cs, CODE_TRAFFIC_DEVICE, Severity::NotChecked),
             [
-                "Nothing may look like a traffic sign or signal, or read as a driving instruction (au-nsw-transport-corridor@2017-11); this needs visual review"
+                "Nothing may look like a traffic sign or signal, or read as a driving instruction (au-nsw-transport-corridor@2017-11); this needs a person's review, recorded as an attestation in the manifest"
             ]
         );
         assert_eq!(find(&cs, CODE_SEQUENCING, Severity::Info).len(), 1);
@@ -1298,7 +1430,7 @@ mod tests {
         assert_eq!(
             find_in(&rep, CODE_TRAFFIC_DEVICE, Severity::NotChecked),
             [
-                "Nothing may look like a traffic sign or signal, or read as a driving instruction (au-nsw-transport-corridor@2017-11); this needs visual review"
+                "Nothing may look like a traffic sign or signal, or read as a driving instruction (au-nsw-transport-corridor@2017-11); this needs a person's review, recorded as an attestation in the manifest"
             ]
         );
         assert_eq!(

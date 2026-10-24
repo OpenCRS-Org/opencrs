@@ -47,6 +47,23 @@
         },
         "tags": { "$ref": "#/$defs/tags" },
         "elements": { "type": "array", "items": { "$ref": "#/$defs/element" } },
+        "attestations": {
+          "type": "array",
+          "description": "A person's review of this file for a check only a person can judge, such as CRS-TRAFFIC-DEVICE. Each counts only for the file whose SHA-256 it names.",
+          "items": { "$ref": "#/$defs/attestation" }
+        },
+        "ext": { "$ref": "common.schema.json#/$defs/ext" }
+      }
+    },
+    "attestation": {
+      "type": "object",
+      "required": ["check", "by", "date", "sha256"],
+      "properties": {
+        "check": { "$ref": "common.schema.json#/$defs/check_code" },
+        "by": { "type": "string", "minLength": 1, "description": "Who reviewed the file: a person, and their organisation if any." },
+        "date": { "type": "string", "format": "date", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+        "sha256": { "type": "string", "pattern": "^[0-9a-fA-F]{64}$", "description": "SHA-256 of the file that was reviewed." },
+        "note": { "type": "string" },
         "ext": { "$ref": "common.schema.json#/$defs/ext" }
       }
     },

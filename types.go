@@ -39,6 +39,17 @@ type Finding struct {
 	Element  string   `json:"element,omitempty"`
 	Screens  []string `json:"screens,omitempty"`
 	Source   string   `json:"source,omitempty"`
+	// Attestation is set on a check only a person can judge, such as
+	// CRS-TRAFFIC-DEVICE, when the manifest attests to it for this file.
+	Attestation *Attestation `json:"attestation,omitempty"`
+}
+
+// Attestation is who reviewed a file for a check only a person can judge,
+// and when. The validator checks only that it names the file's SHA-256.
+type Attestation struct {
+	By   string `json:"by"`
+	Date string `json:"date"`
+	Note string `json:"note,omitempty"`
 }
 
 // ValidatorInfo names the validator that made a report.
