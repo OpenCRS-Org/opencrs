@@ -73,7 +73,7 @@ The top row is the publisher's side, the bottom row the creative side.
 - Consumers re-check at least daily and must honour `Cache-Control`. A document past its `expires_at` must not be used for validation.
 - An optional `changes_url` in the index points to a feed of recent changes, so registries don't need to poll large files.
 
-**4. Schema:** each document declares `"opencrs": "0.1"` and validates against the published JSON Schema at `opencrs.dev/schema/0.1/` (final domain to be decided, since opencrs.org is taken).
+**4. Schema:** each document declares `"opencrs": "0.1"` and validates against the published JSON Schema at `opencrs.dev/schema/0.1/`.
 
 ## Object model
 
@@ -128,8 +128,8 @@ A screen also points to its venue, which is how centre-level rules (a landlord's
 | `id` ✱ | string | Stable identifier within the network |
 | `format` ✱ | string | The Format it uses |
 | `venue` | string | Venue id |
-| `placement` | Placement | `environment` (`indoor` or `outdoor`), level, zone, mounted height in mm, facing direction, and `motion_allowed` (false near roads, for example). For rule packs: `speed_kmh`, `faces_road`, `school_zone` and `luminance_zone` |
-| `viewing` | Viewing | Distance range in metres, typical dwell in seconds, approach (head-on or oblique), ambient light (`indoor`, `daylight`, `night`) |
+| `placement` | Placement | `environment` (`indoor` or `outdoor`), level, zone, mounted height in mm, `facing` (a compass point or degrees), and `motion_allowed` (false near roads, for example). For rule packs: `speed_kmh`, `faces_road`, `school_zone` and `luminance_zone` |
+| `viewing` | Viewing | Distance range in metres, typical dwell in seconds, approach (head-on or oblique), and `light`, the ambient light (`indoor`, `daylight`, `night`) |
 | `overrides` | object | Format fields that differ for this screen, such as an extra blocked region (see Inheritance) |
 | `rules` | RuleSet | Screen-specific rules |
 | `platform_ids` | object | Keys per playback platform, such as `{"cms-a": "frame-123", "cms-b": "display-unit-456"}`, so creative can be published to the right place |
@@ -279,7 +279,7 @@ h_{mm} = \frac{d_{m} \times 1000}{\text{ratio}} \qquad h_{px} = h_{mm} \times \f
 - **A referenced pack applies in full.** Context such as `faces_road: false` doesn't switch a pack's rules off: a publisher that doesn't want a pack's rules on a screen doesn't reference the pack there.
 - **Site consent conditions** are written on the screen as normal rules: `playback` (`min_dwell_s`, `max_transition_s`) and `brightness`. A consent can be stricter than the pack (a longer dwell, say), and the stricter value wins. A consent can't loosen a pack.
 - **Two kinds of rule:**
-  - *Creative* rules are checked when creative is validated: static only, no flashing, nothing resembling a traffic device, readable at a glance, no sequencing.
+  - *Creative* rules are checked when creative is validated: static only, no flashing, nothing resembling a traffic device, readable at a glance. A rule against message sequencing is reported for information only, because sequencing depends on scheduling, which a single file doesn't show.
   - *Playback* rules are for the screen platform to enforce: dwell, transition, failure state, luminance, school-zone switching, and no interaction with phones or vehicles. Validators report them as `info` so everyone sees them, but don't fail creative on them.
 
 **Pack fields.** `min_dwell_s` is a number, or speed bands chosen by `placement.speed_kmh`: a band covers `speed_kmh_from` (inclusive) to `speed_kmh_below` (exclusive), the first match wins, and a band can carry a `note`. `max_luminance_cd_m2` is keyed by lighting period (`day`, `twilight`, `night`), then by `placement.luminance_zone`, with `default` for any zone; `null` means no limit. Zone names are the source's own, and each pack's `notes` say which to use (`zone_1` to `zone_4` in NSW, `A0` to `A4` in WA, `cat_a_high` to `cat_b_low` in Victoria). `failure_state` is `black`, or `blank` where the source requires a blank screen without saying what colour. `citations` say where in the source each rule comes from, `notes` say what the pack leaves out, and `status_note` says what was checked, when.
@@ -291,7 +291,7 @@ h_{mm} = \frac{d_{m} \times 1000}{\text{ratio}} \qquad h_{px} = h_{mm} \times \f
 - **Status:**
   - `unverified`: taken from a summary or extract, not checked against the primary source
   - `draft`: every value checked against the primary source by the maintainer, with page citations
-  - `reviewed`: also reviewed independently, by the regulator or the OMA, say
+  - `reviewed`: also reviewed independently, by the regulator or an industry body, say
   
   A pack without a `status` is `unverified`. Validators report a pack short of `draft` as `info`, so a reader knows how far to trust it.
 
@@ -334,10 +334,10 @@ v = \frac{\text{speed}_{km/h}}{3.6} \qquad t = \min\left(2,\ \frac{d_{far} - d_{
 ```
 
 - Words count every key-message element (`headline`, `subhead`, `body`, `cta`, `offer`, `price`, `text`). The size applies to each of them, rounds up to whole pixels, and warns with little margin, as in Legibility.
-- *Worked example:* at 80 km/h (22.2 m/s), seen from 20–150 m, the range takes 5.9 s to cross, so the driver gets the full 2 s: at most 4 words, read from 20 + 44.4 = 64.4 m, so a cap height of at least 429.6 mm at ratio 150. At 100 km/h, seen from 10–50 m, the range takes only 1.44 s: at most 2 words, read from 50 m.
+- *Worked example:* at 80 km/h (22.22 m/s), seen from 20–150 m, the range takes 5.85 s to cross, so the driver gets the full 2 s: at most 4 words, read from 20 + 44.44 = 64.44 m, so a cap height of at least 429.6 mm at ratio 150. At 100 km/h, seen from 10–50 m, the range takes only 1.44 s: at most 2 words, read from 50 m.
 - **A working assumption to validate before 1.0,** like the ratio and reading rate: the 2 s glance comes from driver-distraction research rules of thumb, not from any of the regulations, which say only "no more than a driver can read at a short glance".
 
-**Who maintains packs:** published openly in the OpenCRS repository (`rulepacks/`), each linked to its source document and version, and built into the reference validator. Ideally reviewed by the OMA, which already tracks the rules across states. The publisher remains responsible for its own consents: a rule pack encodes published rules and doesn't replace legal or planning advice.
+**Who maintains packs:** published openly in the OpenCRS repository (`rulepacks/`), each linked to its source document and version, and built into the reference validator. Ideally also reviewed by the regulator or an industry body that tracks the rules across states. The publisher remains responsible for its own consents: a rule pack encodes published rules and doesn't replace legal or planning advice.
 
 **Resolved:** the NSW luminance values, including the daytime zone 4 figure that was unclear in an earlier extraction, were checked against Table 6 of the guidelines (p. 44): 6000 cd/m² by day in zone 4. The OMA's policy (Table 2, p. 2) gives the same figures.
 
@@ -481,7 +481,7 @@ Publishers can start at Core in an afternoon from existing spec sheets, and add 
 
 - **Licence:** spec text under CC BY 4.0, schemas and reference code under Apache 2.0, so anyone can implement it, including competitors.
 - **Now:** Mestra edits the spec in a public GitHub repository, with issues and proposals open to anyone.
-- **Later:** once several publishers and validators use it, hand it to a neutral body. The natural candidates are the OAAA, which already supports OpenOOH, or the Outdoor Media Association in Australia.
+- **Later:** once several publishers and validators use it, hand it to an independent industry or standards body. Which one, and how proposals are decided until then, is an open question below.
 
 ## A complete example
 
@@ -540,7 +540,7 @@ Publishers can start at Core in an afternoon from existing spec sheets, and add 
       "screens": [
         {
           "id": "HC-L1-001", "format": "portrait-totem-75", "venue": "harbour-central",
-          "placement": { "environment": "indoor", "level": "L1", "zone": "food court", "mounted_height_mm": 0 },
+          "placement": { "environment": "indoor", "level": "L1", "zone": "food court", "mounted_height_mm": 0, "facing": "N" },
           "viewing": { "distance_m": [2, 6], "dwell_s": 4, "approach": "head-on", "light": "indoor" },
           "platform_ids": { "cms-a": "frame-4411" }
         },
@@ -588,7 +588,7 @@ The two totems share one format, but the second has a column blocking its bottom
 3. **First consumer:** at least one tool consumes it in production.
 4. **Independent validators:** at least two independent validators pass the conformance suite.
 5. **0.2:** calibrate legibility defaults from real campaigns; add fields publishers ask for.
-6. **1.0 and governance:** three or more publishers and two or more validators in production, then offer it to the OAAA or the OMA.
+6. **1.0 and governance:** three or more publishers and two or more validators in production, then offer it to an independent industry or standards body.
 
 **Open questions**
 
@@ -596,7 +596,7 @@ The two totems share one format, but the second has a column blocking its bottom
 - [ ] Should rules reference an advertising code body, such as Ad Standards in Australia, or stay generic?
 - [ ] How should HTML5 and dynamic templates be described: as a media type, or as a separate creative kind?
 - [ ] Should the legibility ratio be defined per script or language (Latin, Chinese and so on)?
-- [ ] Which neutral body should OpenCRS move to at 1.0, and how should proposals be decided until then?
+- [ ] Which independent industry or standards body should OpenCRS move to at 1.0, and how should proposals be decided until then?
 
 ## Sources
 
