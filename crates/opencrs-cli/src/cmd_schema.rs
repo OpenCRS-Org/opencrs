@@ -1,36 +1,18 @@
-use crate::args::FlagSet;
+use crate::cli::SchemaArgs;
 use crate::io::read_file;
 use opencrs::batch::lint;
 use opencrs::{Kind, SchemaOptions};
 use std::io::Write;
 
-pub fn run(args: &[String], stdout: &mut dyn Write, stderr: &mut dyn Write) -> i32 {
-    let (kind, local_http, files) = {
-        let mut fs = FlagSet::new("schema", stderr);
-        fs.string("kind", "", "document kind (default: detect)");
-        fs.boolean(
-            "allow-local-http",
-            "accept http://localhost document URLs in an index, for local testing",
-        );
-        if fs.parse(args).is_err() {
-            return 2;
-        }
-        (
-            fs.get_string("kind").to_string(),
-            fs.get_bool("allow-local-http"),
-            fs.rest().to_vec(),
-        )
-    };
-    if files.is_empty() {
-        let _ = writeln!(stderr, "opencrs schema: no files given");
-        return 2;
-    }
+pub fn run(a: &SchemaArgs, stdout: &mut dyn Write, stderr: &mut dyn Write) -> i32 {
+    let kind = a.kind.clone().unwrap_or_default();
+    let files = &a.files;
     let opt = SchemaOptions {
         list: true,
-        allow_local_http: local_http,
+        allow_local_http: a.allow_local_http,
     };
     let mut status = 0;
-    for path in &files {
+    for path in files {
         let raw = match read_file(path) {
             Ok(r) => r,
             Err((_, e)) => {

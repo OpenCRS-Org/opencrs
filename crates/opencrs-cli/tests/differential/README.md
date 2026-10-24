@@ -30,6 +30,11 @@ removed, each number set to -1, 0, 1e9 and a string, each id reference set to
 
 ## What is not compared byte for byte
 
+- Help and usage errors. The CLI now parses with clap, so its help text and
+  usage errors differ from Go's: for those cases only the exit status is
+  compared (2 for a usage error with no stdout; 0 and help on stdout when
+  help is asked for, where Go exited 2 for a command's `-h`).
+
 - (a) Schema errors: lines quoting one are reduced to their instance paths and
   the count is dropped. Paths under a node Go reports as "validation failed"
   fold into that node.

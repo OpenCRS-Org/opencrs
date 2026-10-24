@@ -1,4 +1,4 @@
-use crate::args::FlagSet;
+use crate::cli::ConformanceArgs;
 use crate::conformance::{command, load, reference, run as run_cases};
 use opencrs::conformance::LEVELS;
 use std::io::Write;
@@ -11,48 +11,19 @@ fn title(s: &str) -> String {
     }
 }
 
-pub fn run(args: &[String], stdout: &mut dyn Write, stderr: &mut dyn Write) -> i32 {
-    let (level, cmd, verbose, rest) = {
-        let mut fs = FlagSet::new("conformance", stderr);
-        fs.string(
-            "level",
-            "full",
-            "conformance level to test: core, layout or full",
-        );
-        fs.string(
-            "cmd",
-            "",
-            "external validator to test: run with each case directory as its last argument, it must print the reports as a JSON array",
-        );
-        fs.boolean("v", "list passing cases too");
-        if fs.parse_interleaved(args).is_err() {
-            return 2;
-        }
-        (
-            fs.get_string("level").to_string(),
-            fs.get_string("cmd").to_string(),
-            fs.get_bool("v"),
-            fs.rest().to_vec(),
-        )
-    };
+pub fn run(a: &ConformanceArgs, stdout: &mut dyn Write, stderr: &mut dyn Write) -> i32 {
+    let level = a.level.clone();
+    let cmd = a.cmd.clone().unwrap_or_default();
+    let verbose = a.verbose;
     if !LEVELS.contains(&level.as_str()) {
         let _ = writeln!(
             stderr,
-            "opencrs conformance: -level must be one of {}",
+            "opencrs conformance: --level must be one of {}",
             LEVELS.join(", ")
         );
         return 2;
     }
-    let mut dir = "conformance/0.1".to_string();
-    if rest.len() > 1 {
-        let _ = writeln!(
-            stderr,
-            "usage: opencrs conformance [-level L] [-cmd CMD] [DIR]"
-        );
-        return 2;
-    } else if rest.len() == 1 {
-        dir = rest[0].clone();
-    }
+    let dir = a.dir.to_string_lossy().into_owned();
     let cases = match load(&dir) {
         Ok(c) => c,
         Err(e) => {

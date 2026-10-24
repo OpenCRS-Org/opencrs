@@ -1,8 +1,8 @@
 // Runs one conformance case through the WebAssembly module, as the adapter
-// for `opencrs conformance -cmd`. The command gets the case directory as its
+// for `opencrs conformance --cmd`. The command gets the case directory as its
 // last argument and prints the reports as a JSON array.
 //
-//   OPENCRS_WASM=/tmp/wasm cargo run -p opencrs-cli -- conformance -cmd "node js/conformance-adapter.mjs"
+//   OPENCRS_WASM=/tmp/wasm cargo run -p opencrs-cli -- conformance --cmd "node js/conformance-adapter.mjs"
 //
 // OPENCRS_WASM is the OUT_DIR given to scripts/build-wasm.sh.
 import { readFile } from "node:fs/promises";

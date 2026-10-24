@@ -30,6 +30,43 @@ fn oracle() -> Option<PathBuf> {
     }
 }
 
+/// Whether the Go CLI's stderr is a usage or flag error. The Rust CLI parses
+/// its command line with clap, so it words these differently (and spells
+/// flags `--like-this`); only the fact, exit status 2 and no stdout, is
+/// compared.
+fn is_usage_error(go: &Outcome) -> bool {
+    let e = go.stderr.as_str();
+    go.code == 2
+        && go.stdout.is_empty()
+        && [
+            "Usage of ",
+            "usage: ",
+            "flag provided but not defined",
+            "flag needs an argument",
+            "bad flag syntax",
+            "invalid value ",
+            "invalid boolean value",
+            "opencrs: unknown command",
+            "opencrs: the OpenCRS 0.1 reference validator",
+            "opencrs schema: no files given",
+            "opencrs check: -now: ",
+            "opencrs conformance: -level must be",
+            "opencrs fetch: -token wants",
+        ]
+        .iter()
+        .any(|p| e.starts_with(p))
+}
+
+/// Asking for help: Go prints usage (to stdout for the top level, to stderr
+/// and exit 2 for a command); the Rust CLI prints its own help to stdout and
+/// exits 0 either way.
+fn asks_for_help(c: &Case) -> bool {
+    c.args.first().map(String::as_str) == Some("help")
+        || c.args
+            .iter()
+            .any(|a| matches!(a.as_str(), "-h" | "-help" | "--help"))
+}
+
 /// One invocation to compare.
 #[derive(Clone, Default)]
 struct Case {
@@ -174,22 +211,16 @@ fn compare(oracle: &Path, cases: &[Case]) {
     for c in cases {
         let (g, r) = (run(oracle, &rust, c), run(&rust, oracle, c));
         let mut why = Vec::new();
-        if g.code != r.code {
-            why.push(format!("exit: go {} rust {}", g.code, r.code));
-        }
-        let (go_out, rs_out) = (
-            normalise_stdout(&c.args, &g.stdout, &g.stdout),
-            normalise_stdout(&c.args, &r.stdout, &g.stdout),
-        );
-        if go_out != rs_out {
-            why.push(format!("stdout:\n--- go\n{go_out}\n--- rust\n{rs_out}"));
-        }
-        let (go_err, rs_err) = (
-            normalise_text(&g.stderr, &g.stderr),
-            normalise_text(&r.stderr, &g.stderr),
-        );
-        if go_err != rs_err {
-            why.push(format!("stderr:\n--- go\n{go_err}\n--- rust\n{rs_err}"));
+        if asks_for_help(c) {
+            if r.code != 0 || !r.stderr.is_empty() || !r.stdout.contains("Usage: opencrs") {
+                why.push(format!("help: rust exit {}\n{}", r.code, r.stderr));
+            }
+        } else if is_usage_error(&g) {
+            if r.code != 2 || !r.stdout.is_empty() {
+                why.push(format!("usage error: rust exit {}\n{}", r.code, r.stdout));
+            }
+        } else {
+            compare_one(c, &g, &r, &mut why);
         }
         if !why.is_empty() {
             diffs.push(format!(
@@ -200,11 +231,31 @@ fn compare(oracle: &Path, cases: &[Case]) {
             ));
         }
     }
-    println!(
-        "compared {} invocations, {} differ",
-        cases.len(),
-        diffs.len()
+    finish(cases.len(), diffs);
+}
+
+fn compare_one(c: &Case, g: &Outcome, r: &Outcome, why: &mut Vec<String>) {
+    if g.code != r.code {
+        why.push(format!("exit: go {} rust {}", g.code, r.code));
+    }
+    let (go_out, rs_out) = (
+        normalise_stdout(&c.args, &g.stdout, &g.stdout),
+        normalise_stdout(&c.args, &r.stdout, &g.stdout),
     );
+    if go_out != rs_out {
+        why.push(format!("stdout:\n--- go\n{go_out}\n--- rust\n{rs_out}"));
+    }
+    let (go_err, rs_err) = (
+        normalise_text(&g.stderr, &g.stderr),
+        normalise_text(&r.stderr, &g.stderr),
+    );
+    if go_err != rs_err {
+        why.push(format!("stderr:\n--- go\n{go_err}\n--- rust\n{rs_err}"));
+    }
+}
+
+fn finish(total: usize, diffs: Vec<String>) {
+    println!("compared {total} invocations, {} differ", diffs.len());
     if !diffs.is_empty() {
         if let Some(p) = std::env::var_os("OPENCRS_DIFF_LOG") {
             let _ = std::fs::write(p, diffs.join("\n\n"));
@@ -218,7 +269,7 @@ fn compare(oracle: &Path, cases: &[Case]) {
         panic!(
             "{} of {} invocations differ; first ones:\n\n{shown}",
             diffs.len(),
-            cases.len()
+            total
         );
     }
 }

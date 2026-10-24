@@ -186,14 +186,143 @@ fn usage_errors() {
     }
     let (code, out, err) = run_cli(&["help"]);
     assert_eq!((code, err.as_str()), (0, ""));
-    assert!(out.starts_with("opencrs: the OpenCRS 0.1 reference validator\n"));
+    assert!(out.starts_with("Check digital-signage creative against the screens it's made for\n"));
     let (_, _, err) = run_cli(&["nope"]);
-    assert!(err.starts_with("opencrs: unknown command \"nope\"\n\nopencrs: the OpenCRS"));
-    let (_, _, err) = run_cli(&["check", "-spec", "x", "-now", "yesterday", "c.json"]);
     assert!(
-        err.starts_with("opencrs check: -now: parsing time \"yesterday\" as "),
+        err.starts_with("error: unrecognized subcommand 'nope'\n"),
         "{err}"
     );
+    let (_, _, err) = run_cli(&["check", "-spec", "x", "-now", "yesterday", "c.json"]);
+    assert!(
+        err.starts_with("opencrs check: --now: parsing time \"yesterday\" as "),
+        "{err}"
+    );
+}
+
+/// No command prints the top-level help to stderr and exits 2; asking for
+/// help prints the same text to stdout and exits 0.
+#[test]
+fn help_and_version() {
+    let (code, out, err) = run_cli(&[]);
+    assert_eq!((code, out.as_str()), (2, ""));
+    for args in [&["help"][..], &["-h"], &["--help"], &["-help"]] {
+        let (c, o, e) = run_cli(args);
+        assert_eq!((c, e.as_str()), (0, ""), "{args:?}");
+        assert_eq!(o, err, "{args:?}");
+    }
+    assert!(err.contains("Usage: opencrs <COMMAND>\n"), "{err}");
+    assert!(!err.contains('\x1b'), "plain without a terminal");
+
+    for args in [
+        &["check", "-h"][..],
+        &["check", "-help"],
+        &["help", "check"],
+    ] {
+        let (c, o, e) = run_cli(args);
+        assert_eq!((c, e.as_str()), (0, ""), "{args:?}");
+        assert!(o.contains("Usage: opencrs check "), "{o}");
+        assert!(
+            o.ends_with("Exit status: 0 passed, 1 a file failed, 2 usage or read error\n"),
+            "{o}"
+        );
+    }
+    // --help is the long form.
+    let (_, short, _) = run_cli(&["check", "-h"]);
+    let (_, long, _) = run_cli(&["check", "--help"]);
+    assert!(
+        long.len() > short.len() && long.contains("Examples:"),
+        "{long}"
+    );
+
+    let (code, out, _) = run_cli(&["-V"]);
+    assert_eq!(
+        (code, out),
+        (0, format!("opencrs {}\n", env!("CARGO_PKG_VERSION")))
+    );
+    let (code, out, _) = run_cli(&["version"]);
+    assert_eq!(code, 0);
+    assert!(out.starts_with(&format!(
+        "opencrs {}\nOpenCRS spec 0.1\n",
+        env!("CARGO_PKG_VERSION")
+    )));
+    assert!(out.contains("au-nsw-transport-corridor@2017-11  "), "{out}");
+}
+
+/// The old single-dash spellings and the new `--long` ones do the same.
+#[test]
+fn old_and_new_spellings_agree() {
+    let screens = ex("retail.screens.json");
+    let creative = ex("creative.json");
+    let old = run_cli(&[
+        "check",
+        "-spec",
+        &screens,
+        "-json",
+        "-now",
+        "2026-10-22T12:00:00Z",
+        &creative,
+    ]);
+    let new = run_cli(&[
+        "check",
+        "--spec",
+        &screens,
+        "--json",
+        "--now",
+        "2026-10-22T12:00:00Z",
+        &creative,
+    ]);
+    let short = run_cli(&[
+        "check",
+        &creative,
+        "-s",
+        &screens,
+        "--json=true",
+        "--now=2026-10-22T12:00:00Z",
+    ]);
+    assert_eq!(old, new);
+    assert_eq!(old.0, 1);
+    assert_eq!(old, short);
+    // A value that looks like a flag is still the flag's value; `=false`
+    // turns a boolean off, last one wins.
+    let (code, out, _) = run_cli(&[
+        "check",
+        "-spec",
+        &screens,
+        "-json",
+        "-json=false",
+        "-now",
+        "2026-10-22T12:00:00Z",
+        &creative,
+    ]);
+    assert_eq!(code, 1);
+    assert!(out.starts_with("lunch-portrait.png"), "{out}");
+    let (code, _, err) = run_cli(&["check", "-spec", "-json", &creative]);
+    assert_eq!(code, 2);
+    assert!(err.starts_with("-json: open -json: no such file"), "{err}");
+    // Flags after `--` are positionals.
+    let (code, _, _) = run_cli(&["schema", "--", "-kind"]);
+    assert_eq!(code, 2);
+    // Booleans with junk values and unknown flags are usage errors.
+    for args in [
+        vec!["schema", "-allow-local-http=maybe", "x"],
+        vec!["schema", "-nope", "x"],
+        vec!["schema", "---x"],
+        vec!["schema", "-=x"],
+        vec!["schema", "-kind"],
+        vec!["check", "-margin", "1e999", "-spec", "x", "c.json"],
+        vec!["conformance", "-level", "core", "a", "b"],
+    ] {
+        let (code, out, _) = run_cli(&args);
+        assert_eq!((code, out.as_str()), (2, ""), "{args:?}");
+    }
+    let (code, out, _) = run_cli(&["schema", "-kind=screens", "--allow-local-http", &screens]);
+    assert_eq!(code, 0, "{out}");
+    // `-o` and `--o` both name the output directory.
+    for flag in ["-o", "--o", "--output"] {
+        let (code, _, err) = run_cli(&["fetch", flag, "x", "a b"]);
+        assert_eq!(code, 2, "{flag}");
+        assert!(err.contains("opencrs fetch:"), "{flag}: {err}");
+    }
 }
 
 /// A publisher testing its index locally before deploying it.
@@ -253,7 +382,7 @@ fn fetch_usage_errors() {
     let (_, _, err) = run_cli(&["fetch", "-token", "nope", "a.example"]);
     assert_eq!(
         err,
-        "opencrs fetch: -token wants DOMAIN=TOKEN, got \"nope\"\n"
+        "opencrs fetch: --token wants DOMAIN=TOKEN, got \"nope\"\n"
     );
 }
 
@@ -274,7 +403,7 @@ fn conformance_passes_full_level() {
     assert_eq!(code, 2);
     assert_eq!(
         err,
-        "opencrs conformance: -level must be one of core, layout, full\n"
+        "opencrs conformance: --level must be one of core, layout, full\n"
     );
 }
 

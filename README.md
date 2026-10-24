@@ -23,7 +23,11 @@ This repository holds the [0.1 specification](OpenCRS%200.1%20Specification.md),
 cargo build --release -p opencrs-cli    # target/release/opencrs: a single binary; no runtime needed
 ```
 
-**Check documents against the schema** (add `-allow-local-http` to test an index that points at `http://localhost`). For a `screens.json`, this also reports screens that name a missing format or venue (`CRS-REFERENCE`) and rules that inheritance has made impossible to meet (`CRS-RULE-CONFLICT`).
+Run `opencrs --help` for the commands and `opencrs COMMAND --help` for a command's options. The single-dash spellings of earlier versions (`-spec`, `-json`, `-allow-local-http`) still work.
+
+A man page (`man/opencrs.1`) and shell completions (`completions/`) are generated from the command definition and included in release archives; the Homebrew formula installs them. `opencrs completion bash|zsh|fish|powershell` prints a completion script. After changing the command line, run `cargo xtask generate` and commit the result; a test fails if they are out of date.
+
+**Check documents against the schema** (add `--allow-local-http` to test an index that points at `http://localhost`). For a `screens.json`, this also reports screens that name a missing format or venue (`CRS-REFERENCE`) and rules that inheritance has made impossible to meet (`CRS-RULE-CONFLICT`).
 
 ```sh
 opencrs schema examples/harbourline/retail.screens.json examples/harbourline/creative.json
@@ -32,7 +36,7 @@ opencrs schema examples/harbourline/retail.screens.json examples/harbourline/cre
 **Check creative against a publisher's requirements**
 
 ```sh
-opencrs check -spec examples/harbourline/retail.screens.json examples/harbourline/creative.json
+opencrs check --spec examples/harbourline/retail.screens.json examples/harbourline/creative.json
 ```
 
 ```
@@ -44,17 +48,17 @@ lunch-portrait.png → harbourline.example/retail/portrait-totem-75: FAIL
 
 The same file passes on one totem and fails on its twin, because the second is seen from further away. That is the point of describing screens as people see them.
 
-The validator reads each file's type, pixel size, byte size and SHA-256 (and duration, for MP4) from the file itself. Values the manifest declares are used only when the file isn't available (`-no-files`). Use `-json` to get a JSON array of reports, each in the spec's report format, and `-spec` more than once to check against several publishers. Exit status is 1 if any report fails.
+The validator reads each file's type, pixel size, byte size and SHA-256 (and duration, for MP4) from the file itself. Values the manifest declares are used only when the file isn't available (`--no-files`). Use `--json` to get a JSON array of reports, each in the spec's report format, and `--spec` more than once to check against several publishers. Exit status is 1 if any report fails.
 
 **Discover a publisher's documents and check which to trust**
 
 ```sh
 opencrs fetch harbourline.example                       # read the index, fetch every document, follow delegates
 opencrs fetch https://specs.cms-a.example/harbourline/airports.screens.json   # does its publisher vouch for this exact URL?
-opencrs fetch -token harbourline.example=TOKEN -o specs harbourline.example         # include partner documents and save
+opencrs fetch --token harbourline.example=TOKEN --output specs harbourline.example         # include partner documents and save
 ```
 
-Each document is marked `trusted`, `expired`, `rejected`, `skipped` (a partner document without credentials) or `failed`, with the reason. `-o` saves trusted documents byte-for-byte as served, ready for `opencrs check -spec`. When partner documents are included, it also writes a `merged.screens.json` and lists any conflicts. Use `-allow-local-http` to test an index on `http://localhost` before deploying it.
+Each document is marked `trusted`, `expired`, `rejected`, `skipped` (a partner document without credentials) or `failed`, with the reason. `--output` saves trusted documents byte-for-byte as served, ready for `opencrs check -spec`. When partner documents are included, it also writes a `merged.screens.json` and lists any conflicts. Use `--allow-local-http` to test an index on `http://localhost` before deploying it.
 
 `fetch` refuses to connect to loopback, private, link-local, shared (CGNAT), multicast, documentation and other internal addresses, checked after DNS resolution and again on every redirect, so an index can't aim it at a machine's own services or its network. `-allow-local-http` is the opt-in for local testing: it allows `http://` and connections to `localhost`, `127.0.0.1` and `[::1]` only. `fetch` connects directly and ignores `HTTP(S)_PROXY`.
 
@@ -76,7 +80,7 @@ This prints the merged format, rules and derived values: minimum key and legal c
 
 ```sh
 opencrs conformance                       # the Rust validator, at the Full level
-opencrs conformance -cmd ./my-adapter.sh  # any other validator, through an adapter
+opencrs conformance --cmd ./my-adapter.sh  # any other validator, through an adapter
 ```
 
 See [`conformance/README.md`](conformance/README.md) for the case format, the matching rules and how to write an adapter.

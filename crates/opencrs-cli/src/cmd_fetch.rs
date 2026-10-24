@@ -1,4 +1,4 @@
-use crate::args::FlagSet;
+use crate::cli::FetchArgs;
 use crate::http::UreqFetcher;
 use opencrs::discover::{
     DiscoveredDocument, DiscoveryResult, Fetcher, Options, Status, discover, merge, verify,
@@ -15,7 +15,7 @@ struct Output<'a> {
     verified: Option<&'a DiscoveredDocument>,
 }
 
-pub fn run(args: &[String], stdout: &mut dyn Write, stderr: &mut dyn Write) -> i32 {
+pub fn run(args: &FetchArgs, stdout: &mut dyn Write, stderr: &mut dyn Write) -> i32 {
     run_with(args, stdout, stderr, &|allow| {
         Box::new(UreqFetcher::new(allow))
     })
@@ -24,46 +24,16 @@ pub fn run(args: &[String], stdout: &mut dyn Write, stderr: &mut dyn Write) -> i
 type MakeFetcher<'a> = &'a dyn Fn(bool) -> Box<dyn Fetcher>;
 
 pub fn run_with(
-    args: &[String],
+    a: &FetchArgs,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
     make: MakeFetcher<'_>,
 ) -> i32 {
-    let (tokens, out_dir, as_json, local_http, target) = {
-        let mut fs = FlagSet::new("fetch", stderr);
-        fs.multi(
-            "token",
-            "DOMAIN=TOKEN: bearer token a publisher issued for its partner documents (repeatable)",
-        );
-        fs.string(
-            "o",
-            "",
-            "save trusted documents, exactly as served, under this directory",
-        );
-        fs.boolean("json", "print the result as JSON");
-        fs.boolean(
-            "allow-local-http",
-            "local testing: allow http:// and connections to localhost, 127.0.0.1 and [::1] (other internal addresses stay refused)",
-        );
-        if fs.parse_interleaved(args).is_err() {
-            return 2;
-        }
-        if fs.rest().len() != 1 {
-            drop(fs);
-            let _ = writeln!(
-                stderr,
-                "usage: opencrs fetch [-token DOMAIN=TOKEN] [-o DIR] [-json] DOMAIN|URL"
-            );
-            return 2;
-        }
-        (
-            fs.get_multi("token").to_vec(),
-            fs.get_string("o").to_string(),
-            fs.get_bool("json"),
-            fs.get_bool("allow-local-http"),
-            fs.rest()[0].clone(),
-        )
-    };
+    let tokens = &a.token;
+    let out_dir = a.output.clone().unwrap_or_default();
+    let as_json = a.json;
+    let local_http = a.allow_local_http;
+    let target = a.target.clone();
     let n = chrono::Local::now();
     let mut opt = Options {
         tokens: HashMap::new(),
@@ -72,7 +42,7 @@ pub fn run_with(
         max_index_entries: 0,
         max_run_bytes: 0,
     };
-    for t in &tokens {
+    for t in tokens {
         match t.split_once('=') {
             Some((d, tok)) if !d.is_empty() && !tok.is_empty() => {
                 opt.tokens.insert(d.to_lowercase(), tok.to_string());
@@ -80,7 +50,7 @@ pub fn run_with(
             _ => {
                 let _ = writeln!(
                     stderr,
-                    "opencrs fetch: -token wants DOMAIN=TOKEN, got {}",
+                    "opencrs fetch: --token wants DOMAIN=TOKEN, got {}",
                     opencrs::gofmt::quote(t)
                 );
                 return 2;
