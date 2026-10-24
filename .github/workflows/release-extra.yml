@@ -53,8 +53,12 @@ jobs:
       - name: Publish
         run: |
           set -euo pipefail
+          # npm wants a dist-tag for a prerelease; "next" keeps "latest" on
+          # the newest stable version.
+          tag=latest
+          case "$TAG" in *-*) tag=next ;; esac
           for pkg in npm/*-npm-package.tar.gz; do
-            npm publish --provenance --access public "$pkg"
+            npm publish --provenance --access public --tag "$tag" "$pkg"
           done
 
   scoop:
@@ -157,6 +161,9 @@ jobs:
 
   winget:
     name: Submit to winget
+    # Off until the first submission is merged (set the repository variable
+    # WINGET_ENABLED to true then), and never for a prerelease.
+    if: ${{ vars.WINGET_ENABLED == 'true' && !fromJson(inputs.plan).announcement_is_prerelease }}
     runs-on: windows-latest
     permissions:
       contents: read

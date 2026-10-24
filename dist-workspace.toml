@@ -27,6 +27,9 @@ targets = [
 # trusted publishing (OIDC), which dist's publish-npm job can't do; the npm
 # installer above still builds the package.
 publish-jobs = ["homebrew"]
+# Publish prereleases too (npm under the "next" tag), so a release candidate
+# exercises every channel.
+publish-prereleases = true
 # The npm scope and package name: @opencrs/cli
 npm-scope = "@opencrs"
 npm-package = "cli"

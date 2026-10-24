@@ -1,6 +1,6 @@
 [package]
 name = "opencrs-wasm"
-version = "0.0.0"
+version = "0.1.0"
 description = "OpenCRS core as a plain-ABI WebAssembly module (no wasm-bindgen, no imports)"
 edition.workspace = true
 license.workspace = true

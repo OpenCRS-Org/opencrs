@@ -17,6 +17,24 @@ This repository holds the [0.1 specification](OpenCRS%200.1%20Specification.md),
 | `js/` | Loader, conformance adapter and smoke test for the WebAssembly build |
 | `opencrs.go` | The Go package (`opencrs.dev/go`): the validator's WebAssembly build (`opencrs.wasm`, embedded) behind a Go API |
 
+## Install
+
+```sh
+brew install opencrs-org/tap/opencrs                                  # macOS and Linux
+scoop bucket add opencrs https://github.com/OpenCRS-Org/scoop-bucket  # Windows
+scoop install opencrs
+npx @opencrs/cli --help                                               # anywhere with Node.js
+docker run --rm -v "$PWD:/work" ghcr.io/opencrs-org/opencrs --help    # container
+```
+
+Or the installer script, which puts `opencrs` in `~/.cargo/bin`:
+
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/OpenCRS-Org/opencrs/releases/latest/download/opencrs-cli-installer.sh | sh
+```
+
+Each [release](https://github.com/OpenCRS-Org/opencrs/releases) also has archives for macOS, Linux (glibc and static musl) and Windows, with checksums and build attestations.
+
 ## The validator
 
 ```sh
@@ -116,6 +134,6 @@ Anyone can implement OpenCRS, including competitors, as the spec's governance se
 
 To contribute, see [CONTRIBUTING.md](CONTRIBUTING.md): commits are signed off under the [Developer Certificate of Origin](DCO). To report a security problem, see [SECURITY.md](SECURITY.md).
 
-The Go module path is `opencrs.dev/go`, a vanity import path: `opencrs.dev` tells the `go` tool that the code lives at `github.com/OpenCRS-Org/opencrs`, so hosting can move without breaking imports. Once that redirect is live and the repository is public, `go get opencrs.dev/go` will work. While the repository is private, set `GOPRIVATE=opencrs.dev/*` and use a GitHub login with access.
+The Go module path is `opencrs.dev/go`, a vanity import path: `opencrs.dev` tells the `go` tool that the code lives at `github.com/OpenCRS-Org/opencrs`, so hosting can move without breaking imports. Add it with `go get opencrs.dev/go`.
 
 **Checking a creative package from someone else.** Every host (the CLI, the npm and Python bindings, and the Go package's `CheckDir`) reads only the files the manifest names, refuses names with `..` or an absolute path, follows symlinks only while they stay inside the package directory, and probes only regular files. In Go, pass `root.FS()` from `os.OpenRoot(dir)` rather than `os.DirFS(dir)`, so the opens themselves are confined too. Two limits remain: a hard link inside the package can't be told from an ordinary file by any host, so unpack untrusted archives without hard links (most extractors have an option; Linux's `protected_hardlinks` also blocks links to other users' files); and a concurrent writer to the directory could swap in a symlink between the check and the open, so check a copy no one else can write to.
