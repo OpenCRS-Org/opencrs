@@ -59,6 +59,18 @@ pub struct Check {
     pub screens: Vec<String>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub source: String,
+    /// Who attested to a check that needs a person's judgement, and when.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attestation: Option<Attested>,
+}
+
+/// The attestation behind a finding, as the report shows it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Attested {
+    pub by: String,
+    pub date: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub note: String,
 }
 
 impl Check {
@@ -72,6 +84,7 @@ impl Check {
             element: String::new(),
             screens: Vec::new(),
             source: String::new(),
+            attestation: None,
         }
     }
 }

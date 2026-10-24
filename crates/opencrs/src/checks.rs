@@ -23,6 +23,7 @@ pub(crate) struct Facts {
     pub duration: Option<f64>,
     pub duration_src: String,
     pub sha256: String,
+    pub sha256_src: String,
 }
 
 /// Gathers the facts for a file, preferring the probe, and reports where the
@@ -38,6 +39,7 @@ pub(crate) fn gather_facts(f: &CreativeFile, p: Option<&Probe>) -> (Facts, Vec<C
         duration: f.duration_s,
         duration_src: "manifest".into(),
         sha256: f.sha256.clone(),
+        sha256_src: if f.sha256.is_empty() { "" } else { "manifest" }.into(),
     };
     let Some(p) = p else {
         return (x, Vec::new());
@@ -58,6 +60,7 @@ pub(crate) fn gather_facts(f: &CreativeFile, p: Option<&Probe>) -> (Facts, Vec<C
         );
     }
     x.sha256 = p.sha256.clone();
+    x.sha256_src = "file".into();
     if !p.media_type.is_empty() {
         if p.media_type != f.media_type {
             mismatch(
@@ -165,6 +168,7 @@ impl<'a> Checker<'a> {
         self.required_elements();
         self.category();
         self.motion();
+        self.unused_attestations();
         self.rule_packs_check();
         self.rule_conflicts();
         self.out

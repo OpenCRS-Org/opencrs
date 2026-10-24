@@ -385,6 +385,21 @@ pub struct CreativeFile {
     pub tags: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub elements: Vec<Element>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attestations: Vec<Attestation>,
+}
+
+/// A person's statement that they reviewed a file for a check only a person
+/// can judge, such as CRS-TRAFFIC-DEVICE. It counts only for the file whose
+/// SHA-256 it names.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Attestation {
+    pub check: String,
+    pub by: String,
+    pub date: String,
+    pub sha256: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub note: String,
 }
 
 /// The Dynamic Creative condition a file is built for.

@@ -1,0 +1,50 @@
+{
+  "id": "full-attestation",
+  "level": "full",
+  "spec": "Creative manifest and validation reports: attestations; Regulatory rule packs: CRS-TRAFFIC-DEVICE",
+  "description": "Whether a roadside file looks like a traffic device needs a person. An attestation for the file's own SHA-256 settles it as info, so the file can pass. One for an earlier version of the file doesn't count, and an attestation for a check the validator makes itself is ignored.",
+  "now": "2026-10-22T12:00:00+11:00",
+  "specs": [
+    "screens.json"
+  ],
+  "creative": "creative.json",
+  "expect": [
+    {
+      "file": "reviewed.png",
+      "target": "conf.example/road/screen/R1",
+      "result": "pass",
+      "checks": [
+        {
+          "code": "CRS-TRAFFIC-DEVICE",
+          "severity": "info"
+        }
+      ]
+    },
+    {
+      "file": "edited.png",
+      "target": "conf.example/road/screen/R1",
+      "result": "incomplete",
+      "checks": [
+        {
+          "code": "CRS-TRAFFIC-DEVICE",
+          "severity": "not_checked"
+        }
+      ]
+    },
+    {
+      "file": "self-attested.png",
+      "target": "conf.example/road/screen/R1",
+      "result": "incomplete",
+      "checks": [
+        {
+          "code": "CRS-TRAFFIC-DEVICE",
+          "severity": "not_checked"
+        },
+        {
+          "code": "CRS-ATTESTATION",
+          "severity": "info"
+        }
+      ]
+    }
+  ]
+}

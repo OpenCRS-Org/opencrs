@@ -322,7 +322,7 @@ The NT and the ACT have no pack, because neither has a territory-wide rule for d
 
 - A pack it doesn't know is reported `not_checked` under `CRS-RULE-PACK`. The others are still evaluated.
 - `CRS-MOTION-PROHIBITED` is an error for a motion file on a screen whose pack disallows motion. It replaces `CRS-MOTION` for that file, and a screen's own `motion_allowed` can't override it. A pack's `no_flashing` sets a 0 Hz flash limit, checked as `CRS-MOTION`.
-- `CRS-TRAFFIC-DEVICE` is always `not_checked`, because only a person can tell whether an image looks like a traffic sign. Reports for screens under such a pack are therefore `incomplete` at best until someone has looked.
+- `CRS-TRAFFIC-DEVICE` needs a person, because only a person can tell whether an image looks like a traffic sign. It is `not_checked` unless the manifest records that someone reviewed this exact file (an attestation, see the creative manifest below); then it is `info`, naming who reviewed it and when, and the report can pass. Without one, reports for screens under such a pack are `incomplete` at best.
 - `CRS-SEQUENCING` is `info`. Sequencing is a property of how files are scheduled on a sign and across signs, which a validator checking one file can't see.
 - `CRS-GLANCE-TEXT` checks words and text size against what a driver can read in one glance (below). Without the screen's `speed_kmh` and viewing distance it is `not_checked`.
 - `CRS-PLAYBACK` is one `info` line per playback limit, with the value chosen for the screen's context and the strictest of the packs and the screen's own rules winning: "Dwell at least 40 s (screen rules); au-nsw-transport-corridor@2017-11 sets 10 s at 60 km/h". Missing context is stated, never guessed: "au-nsw-transport-corridor@2017-11 sets dwell by speed, and the screen has no placement.speed_kmh". A rule that doesn't apply (`school_zone: false`) isn't reported.
@@ -376,6 +376,10 @@ v = \frac{\text{speed}_{km/h}}{3.6} \qquad t = \min\left(2,\ \frac{d_{far} - d_{
 - **`tags`** (on the campaign or a file) say which conditions the creative meets, matching `required_elements[].when`, such as `"offer"`. An empty list means none apply. Leaving `tags` out means unknown, so a conditional requirement is reported `not_checked` rather than guessed.
 - **`bytes`, `duration_s` and `max_flash_hz`** are optional declared values, for when a validator can't read or measure the file itself.
 - **The file wins over the manifest.** When the file is available, a validator reads its type, pixels, size and duration from it, and reports any disagreement with the manifest as `CRS-MANIFEST-MISMATCH`. A SHA-256 mismatch is an error, because it isn't the file that was declared; other mismatches are warnings.
+- **`attestations`** record a person's review of a file for a check only a person can judge. In 0.1 that is `CRS-TRAFFIC-DEVICE`. Each gives the `check`, who reviewed the file (`by`), the `date`, the file's `sha256`, and an optional `note`: `"attestations": [{ "check": "CRS-TRAFFIC-DEVICE", "by": "Sam Ortiz, Baycrest Studio", "date": "2026-10-20", "sha256": "…" }]`.
+  - It counts only for the file whose SHA-256 it names, so editing the file after the review puts the check back to `not_checked`. A validator compares it with the hash it reads from the file, or with the manifest's `sha256` when the file isn't available.
+  - A validator then reports the check as `info`, with the attestation in the finding, so the report can pass. An attestation is a claim by whoever wrote the manifest, not something the validator can verify; the report names the reviewer so the publisher can decide whether to accept it.
+  - Only checks that need a person can be attested. An attestation for any other check changes nothing and is reported as `CRS-ATTESTATION` (`info`).
 
 **The validation report** (written by any validator)
 
@@ -424,11 +428,12 @@ v = \frac{\text{speed}_{km/h}}{3.6} \qquad t = \min\left(2,\ \frac{d_{far} - d_{
 | `CRS-TARGET` | The target's network, format or screen exists in the document |
 | `CRS-RULE-PACK` | Reported `not_checked` when a referenced rule pack couldn't be evaluated, and `info` when a pack is `unverified` |
 | `CRS-MOTION-PROHIBITED` | A rule pack disallows motion on this screen, and the file is motion |
-| `CRS-TRAFFIC-DEVICE` | Nothing resembles a traffic sign or signal. Always `not_checked`: needs visual review |
+| `CRS-TRAFFIC-DEVICE` | Nothing resembles a traffic sign or signal. Needs a person: `not_checked` unless the manifest attests to a review of this file, then `info` |
 | `CRS-GLANCE-TEXT` | Word count and text size are within what a driver can read in one glance, from speed and viewing distance |
 | `CRS-SEQUENCING` | Reminds that a pack prohibits message sequencing. Always `info`: scheduling isn't visible in one file |
 | `CRS-PLAYBACK` | Playback limits from rule packs and the screen's rules (dwell, transition, failure state, luminance, school zones), for the platform to enforce. Always `info` |
 | `CRS-RULE-CONFLICT` | Inherited rules can be met at all, such as position limits that overlap. Also reported against the `screens.json` itself |
+| `CRS-ATTESTATION` | An attestation was ignored, because the validator makes that check itself. Always `info` |
 | `CRS-REFERENCE` | Every screen's format and venue exist. Reported against the `screens.json` itself, and in reports for creative targeting an affected screen |
 
 ## Privacy, visibility and trust
@@ -596,6 +601,7 @@ The two totems share one format, but the second has a column blocking its bottom
 - [ ] Should rules reference an advertising code body, such as Ad Standards in Australia, or stay generic?
 - [ ] How should HTML5 and dynamic templates be described: as a media type, or as a separate creative kind?
 - [ ] Should the legibility ratio be defined per script or language (Latin, Chinese and so on)?
+- [ ] Should a publisher be able to refuse attestations, or say whose it accepts?
 - [ ] Which independent industry or standards body should OpenCRS move to at 1.0, and how should proposals be decided until then?
 
 ## Sources

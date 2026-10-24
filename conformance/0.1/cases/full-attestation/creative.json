@@ -1,0 +1,112 @@
+{
+  "opencrs": "0.1",
+  "campaign": {
+    "id": "conformance",
+    "advertiser": "Example Cafe",
+    "category": "IAB8"
+  },
+  "files": [
+    {
+      "file": "reviewed.png",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "media_type": "image/png",
+      "pixels": [
+        1000,
+        500
+      ],
+      "targets": [
+        "conf.example/road/screen/R1"
+      ],
+      "elements": [
+        {
+          "role": "headline",
+          "text": "Fresh lunch daily",
+          "rect_px": [
+            50,
+            50,
+            900,
+            200
+          ],
+          "cap_height_px": 60
+        }
+      ],
+      "attestations": [
+        {
+          "check": "CRS-TRAFFIC-DEVICE",
+          "by": "Sam Ortiz, Baycrest Studio",
+          "date": "2026-10-20",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "note": "No shapes, colours or words that read as a traffic sign or signal."
+        }
+      ]
+    },
+    {
+      "file": "edited.png",
+      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "media_type": "image/png",
+      "pixels": [
+        1000,
+        500
+      ],
+      "targets": [
+        "conf.example/road/screen/R1"
+      ],
+      "elements": [
+        {
+          "role": "headline",
+          "text": "Fresh lunch daily",
+          "rect_px": [
+            50,
+            50,
+            900,
+            200
+          ],
+          "cap_height_px": 60
+        }
+      ],
+      "attestations": [
+        {
+          "check": "CRS-TRAFFIC-DEVICE",
+          "by": "Sam Ortiz, Baycrest Studio",
+          "date": "2026-10-20",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "note": "No shapes, colours or words that read as a traffic sign or signal."
+        }
+      ]
+    },
+    {
+      "file": "self-attested.png",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "media_type": "image/png",
+      "pixels": [
+        1000,
+        500
+      ],
+      "targets": [
+        "conf.example/road/screen/R1"
+      ],
+      "elements": [
+        {
+          "role": "headline",
+          "text": "Fresh lunch daily",
+          "rect_px": [
+            50,
+            50,
+            900,
+            200
+          ],
+          "cap_height_px": 60
+        }
+      ],
+      "attestations": [
+        {
+          "check": "CRS-GLANCE-TEXT",
+          "by": "Sam Ortiz, Baycrest Studio",
+          "date": "2026-10-20",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "note": "No shapes, colours or words that read as a traffic sign or signal."
+        }
+      ]
+    }
+  ]
+}

@@ -42,6 +42,16 @@
             "description": "Screen ids the finding applies to, when it doesn't apply to every screen of the target."
           },
           "source": { "enum": ["file", "manifest"], "description": "Where the measured value came from." },
+          "attestation": {
+            "type": "object",
+            "description": "For a check only a person can judge: who attested to it in the manifest, and when. The validator checked only that it names this file.",
+            "required": ["by", "date"],
+            "properties": {
+              "by": { "type": "string" },
+              "date": { "type": "string" },
+              "note": { "type": "string" }
+            }
+          },
           "ext": { "$ref": "common.schema.json#/$defs/ext" }
         }
       }
