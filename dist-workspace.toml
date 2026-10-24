@@ -30,6 +30,9 @@ publish-jobs = ["homebrew"]
 # Publish prereleases too (npm under the "next" tag), so a release candidate
 # exercises every channel.
 publish-prereleases = true
+# Build only the opencrs-cli package: a workspace build also builds the npm
+# binding's cdylib, which musl targets can't produce.
+precise-builds = true
 # The npm scope and package name: @opencrs/cli
 npm-scope = "@opencrs"
 npm-package = "cli"
@@ -60,3 +63,8 @@ github-attestations = true
 "actions/upload-artifact" = "cf430e030ddbb5b0abf93d22962f4752f3646cd9" # v7.0.2
 "actions/download-artifact" = "9000827ccba6bdab643e8b6fd33ac0654aef8333" # v8.0.2
 "actions/attest" = "1e69f48acb82d1966a394da916b4c1698aa569d6" # v4.2.2
+
+# Windows on Arm builds on a native runner: cross-compiling it in a Linux
+# container has no clang-cl for ring's assembly.
+[dist.github-custom-runners]
+aarch64-pc-windows-msvc = "windows-11-arm"
