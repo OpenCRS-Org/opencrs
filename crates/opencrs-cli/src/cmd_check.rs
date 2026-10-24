@@ -1,4 +1,4 @@
-use crate::args::FlagSet;
+use crate::cli::CheckArgs;
 use crate::gotime;
 use crate::io::read_file;
 use opencrs::batch::{check_manifest_each, manifest_notes};
@@ -12,62 +12,28 @@ use std::path::Path;
 /// Go's `crs.DefaultWarnMargin`.
 const DEFAULT_WARN_MARGIN: f64 = 1.25;
 
-pub fn run(args: &[String], stdout: &mut dyn Write, stderr: &mut dyn Write) -> i32 {
-    let (specs, files_dir, no_files, now, as_json, margin, manifest_path) = {
-        let mut fs = FlagSet::new("check", stderr);
-        fs.multi("spec", "screens.json to check against (repeatable)");
-        fs.string(
-            "files",
-            "",
-            "directory holding the creative files (default: the manifest's directory)",
-        );
-        fs.boolean(
-            "no-files",
-            "use only the manifest's declared values; don't read the files",
-        );
-        fs.boolean("json", "print reports as a JSON array of spec reports");
-        fs.string("now", "", "validation time, RFC 3339 (default: now)");
-        fs.float(
-            "margin",
-            DEFAULT_WARN_MARGIN,
-            "1.25",
-            "warn when text is below this multiple of its minimum size",
-        );
-        if fs.parse_interleaved(args).is_err() {
-            return 2;
-        }
-        if fs.get_multi("spec").is_empty() || fs.rest().len() != 1 {
-            drop(fs);
-            let _ = writeln!(
-                stderr,
-                "usage: opencrs check -spec SCREENS [-spec ...] [flags] CREATIVE"
-            );
-            return 2;
-        }
-        (
-            fs.get_multi("spec").to_vec(),
-            fs.get_string("files").to_string(),
-            fs.get_bool("no-files"),
-            fs.get_string("now").to_string(),
-            fs.get_bool("json"),
-            fs.get_float("margin"),
-            fs.rest()[0].clone(),
-        )
-    };
+pub fn run(a: &CheckArgs, stdout: &mut dyn Write, stderr: &mut dyn Write) -> i32 {
+    let specs = &a.spec;
+    let files_dir = a.files.clone().unwrap_or_default();
+    let no_files = a.no_files;
+    let now = a.now.clone().unwrap_or_default();
+    let as_json = a.json;
+    let margin = a.margin;
+    let manifest_path = a.creative.clone();
     let now = if now.is_empty() {
         host_now()
     } else {
         match gotime::parse_rfc3339(&now) {
             Ok(t) => t,
             Err(e) => {
-                let _ = writeln!(stderr, "opencrs check: -now: {e}");
+                let _ = writeln!(stderr, "opencrs check: --now: {e}");
                 return 2;
             }
         }
     };
 
     let mut docs = Vec::new();
-    for path in &specs {
+    for path in specs {
         let d = read_file(path)
             .map_err(|(_, e)| e)
             .and_then(|raw| decode_document(&raw).map_err(|e| e.to_string()));

@@ -1,0 +1,156 @@
+#compdef opencrs
+
+autoload -U is-at-least
+
+_opencrs() {
+    typeset -A opt_args
+    typeset -a _arguments_options
+    local ret=1
+
+    if is-at-least 5.2; then
+        _arguments_options=(-s -S -C)
+    else
+        _arguments_options=(-s -C)
+    fi
+
+    local context curcontext="$curcontext" state line
+    _arguments "${_arguments_options[@]}" : \
+'-h[Show help (--help shows more)]' \
+'--help[Show help (--help shows more)]' \
+'-V[Show the version]' \
+'--version[Show the version]' \
+":: :_opencrs_commands" \
+"*::: :->opencrs" \
+&& ret=0
+    case $state in
+    (opencrs)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:opencrs-command-$line[1]:"
+        case $line[1] in
+            (check)
+_arguments "${_arguments_options[@]}" : \
+'*-s+[A screens.json to check against, repeatable]:SCREENS:_default' \
+'*--spec=[A screens.json to check against, repeatable]:SCREENS:_default' \
+'--files=[Directory holding the creative files]:DIR:_default' \
+'--now=[Validation time, RFC 3339 (default\: now)]:TIME:_default' \
+'--margin=[Warn below this multiple of the minimum text size]:RATIO:_default' \
+'--no-files[Use the manifest'\''s declared values, don'\''t read the files]' \
+'--json[Print the reports as a JSON array]' \
+'-h[Show help (--help shows more)]' \
+'--help[Show help (--help shows more)]' \
+':creative -- The creative.json to check:_default' \
+&& ret=0
+;;
+(schema)
+_arguments "${_arguments_options[@]}" : \
+'--kind=[Document kind (default\: detect it)]:KIND:_default' \
+'--allow-local-http[Accept http\://localhost document URLs in an index]' \
+'-h[Show help (--help shows more)]' \
+'--help[Show help (--help shows more)]' \
+'*::files -- The documents to check:_default' \
+&& ret=0
+;;
+(resolve)
+_arguments "${_arguments_options[@]}" : \
+'-h[Show help (--help shows more)]' \
+'--help[Show help (--help shows more)]' \
+':screens -- The screens.json to read:_default' \
+':reference -- A format or screen reference:_default' \
+&& ret=0
+;;
+(fetch)
+_arguments "${_arguments_options[@]}" : \
+'*--token=[Bearer token for a publisher'\''s partner documents, repeatable]:DOMAIN=TOKEN:_default' \
+'-o+[Save trusted documents under this directory]:DIR:_default' \
+'--output=[Save trusted documents under this directory]:DIR:_default' \
+'--json[Print the result as JSON]' \
+'--allow-local-http[Allow http\:// and connections to localhost, for testing]' \
+'-h[Show help (--help shows more)]' \
+'--help[Show help (--help shows more)]' \
+':target -- A publisher'\''s domain, or the URL of one document:_default' \
+&& ret=0
+;;
+(conformance)
+_arguments "${_arguments_options[@]}" : \
+'--level=[Level to test\: core, layout or full]:LEVEL:_default' \
+'--cmd=[External validator to test]:COMMAND:_default' \
+'-v[List passing cases too]' \
+'--verbose[List passing cases too]' \
+'-h[Show help (--help shows more)]' \
+'--help[Show help (--help shows more)]' \
+'::dir -- The conformance directory:_files' \
+&& ret=0
+;;
+(completion)
+_arguments "${_arguments_options[@]}" : \
+'-h[Show help (--help shows more)]' \
+'--help[Show help (--help shows more)]' \
+':shell -- The shell to print completions for:(bash zsh fish powershell)' \
+&& ret=0
+;;
+(version)
+_arguments "${_arguments_options[@]}" : \
+'-h[Show help (--help shows more)]' \
+'--help[Show help (--help shows more)]' \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+}
+
+(( $+functions[_opencrs_commands] )) ||
+_opencrs_commands() {
+    local commands; commands=(
+'check:Check a creative'\''s files against the screens they target' \
+'schema:Check documents against the OpenCRS schemas' \
+'resolve:Show the requirements for a format or a screen' \
+'fetch:Find a publisher'\''s specs and check which to trust' \
+'conformance:Run the conformance suite against a validator' \
+'completion:Print shell completions' \
+'version:Show the tool, spec and rule pack versions' \
+    )
+    _describe -t commands 'opencrs commands' commands "$@"
+}
+(( $+functions[_opencrs__subcmd__check_commands] )) ||
+_opencrs__subcmd__check_commands() {
+    local commands; commands=()
+    _describe -t commands 'opencrs check commands' commands "$@"
+}
+(( $+functions[_opencrs__subcmd__completion_commands] )) ||
+_opencrs__subcmd__completion_commands() {
+    local commands; commands=()
+    _describe -t commands 'opencrs completion commands' commands "$@"
+}
+(( $+functions[_opencrs__subcmd__conformance_commands] )) ||
+_opencrs__subcmd__conformance_commands() {
+    local commands; commands=()
+    _describe -t commands 'opencrs conformance commands' commands "$@"
+}
+(( $+functions[_opencrs__subcmd__fetch_commands] )) ||
+_opencrs__subcmd__fetch_commands() {
+    local commands; commands=()
+    _describe -t commands 'opencrs fetch commands' commands "$@"
+}
+(( $+functions[_opencrs__subcmd__resolve_commands] )) ||
+_opencrs__subcmd__resolve_commands() {
+    local commands; commands=()
+    _describe -t commands 'opencrs resolve commands' commands "$@"
+}
+(( $+functions[_opencrs__subcmd__schema_commands] )) ||
+_opencrs__subcmd__schema_commands() {
+    local commands; commands=()
+    _describe -t commands 'opencrs schema commands' commands "$@"
+}
+(( $+functions[_opencrs__subcmd__version_commands] )) ||
+_opencrs__subcmd__version_commands() {
+    local commands; commands=()
+    _describe -t commands 'opencrs version commands' commands "$@"
+}
+
+if [ "$funcstack[1]" = "_opencrs" ]; then
+    _opencrs "$@"
+else
+    compdef _opencrs opencrs
+fi

@@ -31,4 +31,4 @@ jobs:
       - name: Conformance suite through the module
         env:
           OPENCRS_WASM: ${{ runner.temp }}/wasm
-        run: cargo run -p opencrs-cli -- conformance -cmd "node js/conformance-adapter.mjs"
+        run: cargo run -p opencrs-cli -- conformance --cmd "node js/conformance-adapter.mjs"

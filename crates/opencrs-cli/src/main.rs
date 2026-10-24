@@ -1,4 +1,4 @@
-//! The `opencrs` command: see [`opencrs_cli::run`].
+//! The `opencrs` command: see [`opencrs_cli::run_styled`].
 
 use std::io::Write;
 
@@ -17,7 +17,13 @@ fn main() {
     // stdout is line-buffered by default.
     let mut stdout = std::io::BufWriter::with_capacity(64 * 1024, std::io::stdout().lock());
     let mut stderr = std::io::stderr().lock();
-    let code = opencrs_cli::run(&args, &mut stdout, &mut stderr);
+    // Colour only on a terminal, and never with NO_COLOR (anstream also
+    // honours CLICOLOR, CLICOLOR_FORCE and TERM=dumb).
+    let color = opencrs_cli::Color {
+        stdout: anstream::AutoStream::choice(&std::io::stdout()) != anstream::ColorChoice::Never,
+        stderr: anstream::AutoStream::choice(&std::io::stderr()) != anstream::ColorChoice::Never,
+    };
+    let code = opencrs_cli::run_styled(&args, &mut stdout, &mut stderr, color);
     let _ = stdout.flush();
     std::process::exit(code);
 }

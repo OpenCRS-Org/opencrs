@@ -106,6 +106,55 @@ jobs:
           git commit -m "opencrs ${TAG#v}"
           git push
 
+  # dist's Homebrew formula installs only the binary: it puts any other file in
+  # the archive (man/, completions/) in pkgshare. Add the lines that install
+  # the man page and the shell completions where Homebrew looks for them. The
+  # formula is rewritten on every release, so this runs on every release.
+  homebrew-extras:
+    name: Install the man page and completions from the Homebrew formula
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      TAG: ${{ fromJson(inputs.plan).announcement_tag }}
+    steps:
+      - name: Check out the tap
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: OpenCRS-Org/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap-repo
+      - name: Patch the formula
+        run: |
+          set -euo pipefail
+          f=tap-repo/Formula/opencrs.rb
+          if grep -q 'man1.install' "$f"; then
+            echo "formula already installs the man page"
+            exit 0
+          fi
+          awk '
+            { print }
+            $0 == "    install_binary_aliases!" {
+              print "    man1.install \"man/opencrs.1\""
+              print "    bash_completion.install \"completions/opencrs.bash\" => \"opencrs\""
+              print "    zsh_completion.install \"completions/_opencrs\""
+              print "    fish_completion.install \"completions/opencrs.fish\""
+              done = 1
+            }
+            END { if (!done) exit 1 }
+          ' "$f" > "$f.new"
+          mv "$f.new" "$f"
+      - name: Commit and push
+        working-directory: tap-repo
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/opencrs.rb
+          git diff --cached --quiet && { echo "formula already current"; exit 0; }
+          git commit -m "opencrs ${TAG#v}: install the man page and completions"
+          git push
+
   winget:
     name: Submit to winget
     runs-on: windows-latest
