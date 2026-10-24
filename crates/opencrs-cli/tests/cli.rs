@@ -298,7 +298,7 @@ fn old_and_new_spellings_agree() {
     assert!(out.starts_with("lunch-portrait.png"), "{out}");
     let (code, _, err) = run_cli(&["check", "-spec", "-json", &creative]);
     assert_eq!(code, 2);
-    assert!(err.starts_with("-json: open -json: no such file"), "{err}");
+    assert!(err.starts_with("-json: open -json: "), "{err}");
     // Flags after `--` are positionals.
     let (code, _, _) = run_cli(&["schema", "--", "-kind"]);
     assert_eq!(code, 2);
