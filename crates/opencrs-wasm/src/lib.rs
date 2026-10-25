@@ -14,6 +14,7 @@ mod ops {
     use chrono::DateTime;
     use opencrs::SPEC_VERSION;
     use opencrs::batch::{RequirementsView, check_manifest, lint as lint_document};
+    use opencrs::calc::{self, ScreenWidth};
     use opencrs::json;
     use opencrs::load::{decode_document, decode_manifest};
     use opencrs::probe::{Probe, Prober, Step};
@@ -146,6 +147,75 @@ mod ops {
 
     pub fn resolve(req: &[u8]) -> Vec<u8> {
         try_resolve(req).unwrap_or_else(|e| e)
+    }
+
+    #[derive(Deserialize)]
+    struct ScreenReq {
+        width_mm: f64,
+        width_px: i64,
+    }
+
+    impl ScreenReq {
+        fn width(&self) -> ScreenWidth {
+            ScreenWidth {
+                mm: self.width_mm,
+                px: self.width_px,
+            }
+        }
+    }
+
+    #[derive(Deserialize)]
+    struct LegibilityReq {
+        distance_m: [f64; 2],
+        ratio: Option<f64>,
+        screen: Option<ScreenReq>,
+        dwell_s: Option<f64>,
+        rate: Option<f64>,
+    }
+
+    pub fn legibility(req: &[u8]) -> Vec<u8> {
+        let r: LegibilityReq = match parse(
+            req,
+            r#"{"distance_m": [near, far], "ratio"?, "screen"?: {"width_mm", "width_px"}, "dwell_s"?, "rate"?}"#,
+        ) {
+            Ok(r) => r,
+            Err(e) => return e,
+        };
+        let s = r.screen.as_ref().map(ScreenReq::width);
+        match calc::legibility(r.distance_m, r.ratio, s, r.dwell_s, r.rate) {
+            Ok(l) => reply(&json!(l)),
+            Err(e) => error(e),
+        }
+    }
+
+    #[derive(Deserialize)]
+    struct DwellReq {
+        speed_kmh: f64,
+        distance_m: [f64; 2],
+        ratio: Option<f64>,
+        rate: Option<f64>,
+        screen: Option<ScreenReq>,
+        #[serde(default)]
+        rule_packs: Vec<String>,
+    }
+
+    pub fn dwell(req: &[u8]) -> Vec<u8> {
+        let r: DwellReq = match parse(
+            req,
+            r#"{"speed_kmh", "distance_m": [near, far], "ratio"?, "rate"?, "screen"?, "rule_packs"?: [...]}"#,
+        ) {
+            Ok(r) => r,
+            Err(e) => return e,
+        };
+        let s = r.screen.as_ref().map(ScreenReq::width);
+        match calc::dwell(r.speed_kmh, r.distance_m, r.ratio, r.rate, s, &r.rule_packs) {
+            Ok(d) => reply(&json!(d)),
+            Err(e) => error(e),
+        }
+    }
+
+    pub fn rule_packs(_req: &[u8]) -> Vec<u8> {
+        reply(&json!({ "rule_packs": calc::pack_list() }))
     }
 
     /// The most probe sessions open at once. Starting another ends the
@@ -340,6 +410,34 @@ mod ops {
         }
 
         #[test]
+        fn calculators() {
+            let v = val(legibility(
+                br#"{"distance_m":[2,6],"screen":{"width_mm":940,"width_px":1080}}"#,
+            ));
+            assert_eq!(v["key"]["px"], 46);
+            assert_eq!(v["legal"]["px"], 16);
+            let v = val(dwell(
+                br#"{"speed_kmh":80,"distance_m":[20,150],"rule_packs":["au-nsw-transport-corridor@2017-11"]}"#,
+            ));
+            assert_eq!(v["glance"]["words"], 4);
+            assert_eq!(v["packs"][0]["min_dwell_s"], 25.0);
+            assert!(
+                val(dwell(
+                    br#"{"speed_kmh":80,"distance_m":[20,150],"rule_packs":["x@1"]}"#
+                ))["error"]
+                    .is_string()
+            );
+            assert!(val(legibility(b"{}"))["error"].is_string());
+            assert_eq!(
+                val(rule_packs(b""))
+                    .get("rule_packs")
+                    .and_then(|p| p.as_array())
+                    .map(Vec::len),
+                Some(6)
+            );
+        }
+
+        #[test]
         fn bad_requests_are_errors() {
             assert!(val(probe_start(b"{}"))["error"].is_string());
             assert!(val(probe_feed(99, b"x"))["error"].is_string());
@@ -397,6 +495,9 @@ mod abi {
     op!(opencrs_lint, ops::lint);
     op!(opencrs_check, ops::check);
     op!(opencrs_resolve, ops::resolve);
+    op!(opencrs_legibility, ops::legibility);
+    op!(opencrs_dwell, ops::dwell);
+    op!(opencrs_rule_packs, ops::rule_packs);
     op!(opencrs_probe_start, ops::probe_start);
 
     #[unsafe(no_mangle)]

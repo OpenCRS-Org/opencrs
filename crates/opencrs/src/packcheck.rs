@@ -59,7 +59,7 @@ pub fn glance_at(speed_kmh: f64, distance: [f64; 2], rate: f64) -> Glance {
     t = t.max(0.0);
     Glance {
         seconds: t,
-        words: (t * rate + 1e-9).floor() as i64,
+        words: crate::calc::words_in(t, rate),
         read_from_m: distance[0] + v * t,
     }
 }
@@ -429,7 +429,7 @@ impl<'a> Checker<'a> {
             .as_ref()
             .and_then(|l| l.ratio)
             .unwrap_or(DEFAULT_LEGIBILITY_RATIO);
-        let min_px = req.mm_to_px(g.read_from_m * 1000.0 / ratio);
+        let min_px = req.mm_to_px(crate::calc::cap_height_mm(g.read_from_m, ratio));
         let basis = format!(
             "to read from {} m, the start of a {} s glance at {} km/h (ratio {})",
             num(g.read_from_m.round()),

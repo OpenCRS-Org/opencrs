@@ -55,9 +55,7 @@ impl Requirements<'_> {
     /// Converts a minimum size in millimetres on the screen to pixels,
     /// rounding up: a minimum must never round down to something smaller.
     pub fn mm_to_px(&self, mm: f64) -> Option<i64> {
-        let d = self.px_per_mm()?;
-        // The epsilon stops float noise (46.0000001) from adding a pixel.
-        Some((mm * d - 1e-9).ceil() as i64)
+        Some(crate::calc::mm_to_px(mm, self.px_per_mm()?))
     }
 
     /// Works out the minimum cap height for a class of text. The bool is
@@ -104,7 +102,7 @@ impl Requirements<'_> {
             } else {
                 dist[1]
             };
-            let mm = d * 1000.0 / ratio;
+            let mm = crate::calc::cap_height_mm(d, ratio);
             if mm > m.mm {
                 m.mm = mm;
                 m.basis = format!("at {} m, ratio {}", num(d), num(ratio));
@@ -131,7 +129,7 @@ impl Requirements<'_> {
             .reading_rate_wps
             .unwrap_or(DEFAULT_READING_RATE_WPS);
         Some((
-            (dwell * rate).floor() as i64,
+            crate::calc::words_in(dwell, rate),
             format!("{} s dwell at {} words/s", num(dwell), num(rate)),
         ))
     }
