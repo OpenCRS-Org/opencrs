@@ -8,12 +8,23 @@ type LintResult struct {
 	Kind         string        `json:"kind"`
 	SchemaErrors []SchemaError `json:"schema_errors,omitempty"`
 	// DocumentChecks are a screens document's own problems, found once it
-	// matches the schema: broken references and rule conflicts.
+	// matches the schema: broken references and rule conflicts (errors), and
+	// rule packs the validator doesn't know (warnings).
 	DocumentChecks []Finding `json:"document_checks,omitempty"`
 }
 
-// OK reports whether the document has no problems.
-func (l *LintResult) OK() bool { return len(l.SchemaErrors) == 0 && len(l.DocumentChecks) == 0 }
+// OK reports whether the document has no errors. Warnings don't count.
+func (l *LintResult) OK() bool {
+	if len(l.SchemaErrors) > 0 {
+		return false
+	}
+	for _, c := range l.DocumentChecks {
+		if c.Severity == "error" {
+			return false
+		}
+	}
+	return true
+}
 
 // SchemaError is one place a document departs from its schema.
 type SchemaError struct {

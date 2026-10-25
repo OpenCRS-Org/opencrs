@@ -19,6 +19,7 @@ pub mod load;
 pub mod model;
 pub mod packcheck;
 pub mod probe;
+pub mod publisher;
 pub mod report;
 pub mod resolve;
 pub mod rulepack;
