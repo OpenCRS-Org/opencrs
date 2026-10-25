@@ -202,8 +202,8 @@ If both apply to a screen, after inheritance, the larger size wins. If the ratio
 
 **How the ratio becomes pixels**
 
-```latex
-h_{mm} = \frac{d_{m} \times 1000}{\text{ratio}} \qquad h_{px} = h_{mm} \times \frac{\text{pixels}_{w}}{\text{physical}_{w,mm}}
+```math
+h_{\text{mm}} = \frac{d_{\text{m}} \times 1000}{\text{ratio}} \qquad h_{\text{px}} = h_{\text{mm}} \times \frac{\text{pixels}_{w}}{\text{physical}_{w,\text{mm}}}
 ```
 
 - The key message (`headline`, `subhead`, `body`, `cta`, `offer`, `price`, `text`) uses the **far** end of the viewing range. Legal and fine print (`legal`, `disclaimer`, `fine_print`, `terms`) use the **near** end, since it only needs reading up close.
@@ -329,8 +329,11 @@ The NT and the ACT have no pack, because neither has a territory-wide rule for d
 
 **Reading at a glance (CRS-GLANCE-TEXT).** A driver should look away from the road for at most one glance, taken as 2 s. The driver reads for that long, or less if the sign's viewing range is crossed sooner, at the reading rate (`reading_rate_wps`, default 2). To finish reading by the near end of the range, the driver must start at a distance from which the text is legible at the legibility `ratio` (default 150):
 
-```latex
-v = \frac{\text{speed}_{km/h}}{3.6} \qquad t = \min\left(2,\ \frac{d_{far} - d_{near}}{v}\right) \qquad \text{words} \le \lfloor t \times \text{rate} \rfloor \qquad h_{mm} = \frac{(d_{near} + v\,t) \times 1000}{\text{ratio}}
+```math
+\begin{gathered}
+v = \frac{\text{speed}_{\text{km/h}}}{3.6} \qquad t = \min\left(2,\ \frac{d_{\text{far}} - d_{\text{near}}}{v}\right) \\
+\text{words} \le \lfloor t \times \text{rate} \rfloor \qquad h_{\text{mm}} = \frac{(d_{\text{near}} + v\,t) \times 1000}{\text{ratio}}
+\end{gathered}
 ```
 
 - Words count every key-message element (`headline`, `subhead`, `body`, `cta`, `offer`, `price`, `text`). The size applies to each of them, rounds up to whole pixels, and warns with little margin, as in Legibility.
