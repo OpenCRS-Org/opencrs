@@ -8,6 +8,8 @@
 //   crs.lint(text);                                   // JSON string
 //   await crs.check([specText], creativeText, files, now); // JSON string
 //   crs.resolve(specText, ref);                       // JSON string
+//   crs.legibility({ distance_m: [2, 6] });           // JSON string
+//   crs.dwell({ speed_kmh: 80, distance_m: [20, 150] }); // JSON string
 //
 // Every result is a JSON string: the result, or {"error": "..."}.
 
@@ -131,6 +133,20 @@ export async function load(source) {
     },
     /** resolve(spec, ref) returns the requirements for a format or screen reference. */
     resolve: (spec, ref) => call("opencrs_resolve", { spec, ref }),
+    /**
+     * legibility({distance_m: [near, far], ratio?, screen?: {width_mm, width_px},
+     * dwell_s?, rate?}) gives minimum text sizes and the word limit, worked out
+     * as the legibility check does.
+     */
+    legibility: (request) => call("opencrs_legibility", request),
+    /**
+     * dwell({speed_kmh, distance_m: [near, far], ratio?, rate?, screen?,
+     * rule_packs?}) gives what a driver can read and each built-in pack's
+     * limits at that speed, as the glance and pack checks work them out.
+     */
+    dwell: (request) => call("opencrs_dwell", request),
+    /** rulePacks() lists the rule packs built into the module. */
+    rulePacks: () => call("opencrs_rule_packs", {}),
     /** probe(bytes) is the probe object for one file (throws if it can't be read). */
     probe,
     /** The module's current memory size, in bytes. */

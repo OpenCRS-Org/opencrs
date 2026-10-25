@@ -24,7 +24,8 @@ const compiled = new WebAssembly.Module(wasmBytes);
 assert.equal(WebAssembly.Module.imports(compiled).length, 0, "the module must have no imports");
 const exported = WebAssembly.Module.exports(compiled).map((e) => e.name).sort();
 for (const name of ["memory", "opencrs_alloc", "opencrs_free", "opencrs_version", "opencrs_lint",
-  "opencrs_check", "opencrs_resolve", "opencrs_probe_start", "opencrs_probe_feed"]) {
+  "opencrs_check", "opencrs_resolve", "opencrs_probe_start", "opencrs_probe_feed",
+  "opencrs_legibility", "opencrs_dwell", "opencrs_rule_packs"]) {
   assert.ok(exported.includes(name), `missing export ${name}`);
 }
 
@@ -95,6 +96,16 @@ if (CHECK_PENDING) {
   assert.deepEqual(got, expected, "browser and CLI reports differ");
   assert.equal(check.requirements["harbourline.example/retail/portrait-totem-75"].length, 2);
   assert.ok(Array.isArray(resolved) && resolved.length === 2);
+}
+
+// The calculators give the spec's worked examples.
+{
+  const l = JSON.parse(api.legibility({ distance_m: [2, 6], screen: { width_mm: 940, width_px: 1080 } }));
+  assert.equal(l.key.px, 46);
+  const d = JSON.parse(api.dwell({ speed_kmh: 80, distance_m: [20, 150] }));
+  assert.equal(d.glance.read_from_m, 64.44);
+  assert.equal(d.key.mm, 429.6);
+  assert.equal(JSON.parse(api.rulePacks()).rule_packs.length, 6);
 }
 
 console.log(`ok: opencrs ${api.version} WebAssembly${CHECK_PENDING ? " (check pending)" : ""}`);
