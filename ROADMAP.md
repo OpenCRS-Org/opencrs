@@ -6,13 +6,13 @@ specification itself on the way to 1.0.
 
 Each tool has an issue, labelled
 [`roadmap`](https://github.com/OpenCRS-Org/opencrs/issues?q=label%3Aroadmap),
-where you can follow progress and comment. Dates are targets, not promises,
-and the order can change when publishers or agencies tell us what they need
+where you can follow progress and comment. The groups are done in order,
+but the order can change when publishers or agencies tell us what they need
 first. Sizes are rough: S is a few days, M about a week, L two weeks or more.
 
 ## Tools
 
-### 1. Quick wins, by November 2026
+### 1. Quick wins
 
 [Milestone](https://github.com/OpenCRS-Org/opencrs/milestone/1)
 
@@ -23,7 +23,7 @@ first. Sizes are rough: S is a few days, M about a week, L two weeks or more.
 | [GitHub Action](https://github.com/OpenCRS-Org/opencrs/issues/14) | S | Check creative, or your own `screens.json`, on every push. |
 | [Badge](https://github.com/OpenCRS-Org/opencrs/issues/15) | S | "Specs published with OpenCRS", for media owners' websites. |
 
-### 2. Publisher adoption, by January 2027
+### 2. Publisher adoption
 
 [Milestone](https://github.com/OpenCRS-Org/opencrs/milestone/2)
 
@@ -33,7 +33,7 @@ first. Sizes are rough: S is a few days, M about a week, L two weeks or more.
 | [Spec page generator](https://github.com/OpenCRS-Org/opencrs/issues/17) | M | Turns `screens.json` into a clear spec page and a printable PDF, so the PDF is never out of date. |
 | [Public index](https://github.com/OpenCRS-Org/opencrs/issues/18) | M–L | A neutral, searchable directory of every publisher's specs, checked daily. |
 
-### 3. Importer, templates and simulator, by March 2027
+### 3. Importer, templates and simulator
 
 [Milestone](https://github.com/OpenCRS-Org/opencrs/milestone/3)
 
@@ -57,7 +57,7 @@ first. Sizes are rough: S is a few days, M about a week, L two weeks or more.
 The specification keeps its open questions in the
 [spec](https://opencrs.dev/spec/0.1/) itself. These larger areas are planned
 for before 1.0. Most wait for real publishers, screens or partners to design
-against, so they aren't dated yet.
+against, so they wait until then.
 
 - **Trust:** signed documents, proof of domain ownership, and delegation, for example from a landlord to the media owner who sells its screens.
 - **Composite and unusual surfaces:** multi-panel walls, wraps, curved and LED mesh screens, and synchronised playback.
