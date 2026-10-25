@@ -320,7 +320,7 @@ The NT and the ACT have no pack, because neither has a territory-wide rule for d
 
 **How a validator evaluates packs**
 
-- A pack it doesn't know is reported `not_checked` under `CRS-RULE-PACK`. The others are still evaluated.
+- A pack it doesn't know is reported `not_checked` under `CRS-RULE-PACK`. The others are still evaluated. When a publisher checks its own `screens.json`, validators warn about a pack they don't know, so a mistyped name or version is caught before creative goes unchecked against it.
 - `CRS-MOTION-PROHIBITED` is an error for a motion file on a screen whose pack disallows motion. It replaces `CRS-MOTION` for that file, and a screen's own `motion_allowed` can't override it. A pack's `no_flashing` sets a 0 Hz flash limit, checked as `CRS-MOTION`.
 - `CRS-TRAFFIC-DEVICE` needs a person, because only a person can tell whether an image looks like a traffic sign. It is `not_checked` unless the manifest records that someone reviewed this exact file (an attestation, see the creative manifest below); then it is `info`, naming who reviewed it and when, and the report can pass. Without one, reports for screens under such a pack are `incomplete` at best.
 - `CRS-SEQUENCING` is `info`. Sequencing is a property of how files are scheduled on a sign and across signs, which a validator checking one file can't see.
@@ -429,7 +429,7 @@ v = \frac{\text{speed}_{\text{km/h}}}{3.6} \qquad t = \min\left(2,\ \frac{d_{\te
 | `CRS-SPEC-STALE` | The spec used was current, not expired |
 | `CRS-MANIFEST-MISMATCH` | The file matches what the manifest declares |
 | `CRS-TARGET` | The target's network, format or screen exists in the document |
-| `CRS-RULE-PACK` | Reported `not_checked` when a referenced rule pack couldn't be evaluated, and `info` when a pack is `unverified` |
+| `CRS-RULE-PACK` | Reported `not_checked` when a referenced rule pack couldn't be evaluated, and `info` when a pack is `unverified`. A `warning` against the `screens.json` itself when it names a pack the validator doesn't know |
 | `CRS-MOTION-PROHIBITED` | A rule pack disallows motion on this screen, and the file is motion |
 | `CRS-TRAFFIC-DEVICE` | Nothing resembles a traffic sign or signal. Needs a person: `not_checked` unless the manifest attests to a review of this file, then `info` |
 | `CRS-GLANCE-TEXT` | Word count and text size are within what a driver can read in one glance, from speed and viewing distance |
