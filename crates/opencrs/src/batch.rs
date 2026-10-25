@@ -1,7 +1,7 @@
 //! Checking a manifest against documents, linting a single document, and
 //! the requirements view. Port of `crs/batch.go`.
 
-use crate::check::Check;
+use crate::check::{Check, Severity};
 use crate::document::check_document;
 use crate::error::Error;
 use crate::legibility::TextClass;
@@ -141,9 +141,14 @@ pub struct LintResult {
 }
 
 impl LintResult {
-    /// Whether the document has no problems.
+    /// Whether the document has no errors. Warnings, such as a rule pack
+    /// this validator doesn't know, don't count.
     pub fn ok(&self) -> bool {
-        self.schema_errors.is_empty() && self.document_checks.is_empty()
+        self.schema_errors.is_empty()
+            && self
+                .document_checks
+                .iter()
+                .all(|c| c.severity != Severity::Error)
     }
 }
 
@@ -269,6 +274,23 @@ mod tests {
         assert_eq!(res.document_checks.len(), 1);
         assert_eq!(res.document_checks[0].code, CODE_REFERENCE);
         assert!(super::lint(br#"{"hello":1}"#, None, &opt).is_err());
+        // A rule pack the validator doesn't know is a warning, not an error.
+        let typo = r#"{"opencrs":"0.1","publisher":"a.example","updated_at":"2026-10-20T09:00:00Z","networks":[{"id":"n","name":"N",
+	  "rules":{"rule_packs":["au-nsw-transport-corridor@2017-12"]},
+	  "formats":[{"id":"f","pixels":[1,1],"media":{"static":["image/png"]}}],"screens":[{"id":"s","format":"f"}]}]}"#;
+        let res = super::lint(typo.as_bytes(), None, &opt).unwrap();
+        assert!(res.ok(), "{res:?}");
+        assert_eq!(res.document_checks.len(), 1);
+        let c = &res.document_checks[0];
+        assert_eq!(
+            (c.code.as_str(), c.severity),
+            ("CRS-RULE-PACK", Severity::Warning)
+        );
+        assert_eq!(
+            c.message,
+            "Rule pack au-nsw-transport-corridor@2017-12 isn't known to this validator, so creative won't be checked against it (known: au-nsw-transport-corridor@2017-11)"
+        );
+        assert_eq!(c.screens, ["s"]);
     }
 
     fn harbourline_manifest() -> Manifest {

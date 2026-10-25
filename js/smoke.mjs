@@ -25,7 +25,7 @@ assert.equal(WebAssembly.Module.imports(compiled).length, 0, "the module must ha
 const exported = WebAssembly.Module.exports(compiled).map((e) => e.name).sort();
 for (const name of ["memory", "opencrs_alloc", "opencrs_free", "opencrs_version", "opencrs_lint",
   "opencrs_check", "opencrs_resolve", "opencrs_probe_start", "opencrs_probe_feed",
-  "opencrs_legibility", "opencrs_dwell", "opencrs_rule_packs"]) {
+  "opencrs_legibility", "opencrs_dwell", "opencrs_rule_packs", "opencrs_publisher"]) {
   assert.ok(exported.includes(name), `missing export ${name}`);
 }
 
@@ -106,6 +106,19 @@ if (CHECK_PENDING) {
   assert.equal(d.glance.read_from_m, 64.44);
   assert.equal(d.key.mm, 429.6);
   assert.equal(JSON.parse(api.rulePacks()).rule_packs.length, 6);
+}
+
+// The publisher check runs discovery over pages fetched elsewhere.
+{
+  const index = await text(".well-known/opencrs.json");
+  const ok = { status: 200, etag: '"1"', cache_control: "max-age=3600", content_type: "application/json", allow_origin: "*" };
+  const pages = {
+    "https://harbourline.example/.well-known/opencrs.json": { ...ok, body: index },
+    "https://harbourline.example/opencrs/retail.screens.json": { ...ok, body: screens },
+  };
+  const r = JSON.parse(api.publisher("harbourline.example", pages, "2026-10-25T12:00:00Z"));
+  assert.equal(r.errors, 0, JSON.stringify(r.advice));
+  assert.equal(r.discovery.documents[0].status, "trusted");
 }
 
 console.log(`ok: opencrs ${api.version} WebAssembly${CHECK_PENDING ? " (check pending)" : ""}`);

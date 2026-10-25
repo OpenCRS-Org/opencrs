@@ -145,6 +145,14 @@ export async function load(source) {
      * limits at that speed, as the glance and pack checks work them out.
      */
     dwell: (request) => call("opencrs_dwell", request),
+    /**
+     * publisher(domain, pages, now?) checks a publisher's published specs from
+     * pages already fetched, keyed by URL: {status, body, error?, etag?,
+     * cache_control?, last_modified?, content_type?, content_encoding?,
+     * allow_origin?}. Discovery, trust and linting are the core's.
+     */
+    publisher: (domain, pages, now = "", missing = "") =>
+      call("opencrs_publisher", { domain, pages, now: now || new Date().toISOString(), missing }),
     /** rulePacks() lists the rule packs built into the module. */
     rulePacks: () => call("opencrs_rule_packs", {}),
     /** probe(bytes) is the probe object for one file (throws if it can't be read). */

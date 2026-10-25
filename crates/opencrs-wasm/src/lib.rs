@@ -18,6 +18,7 @@ mod ops {
     use opencrs::json;
     use opencrs::load::{decode_document, decode_manifest};
     use opencrs::probe::{Probe, Prober, Step};
+    use opencrs::publisher::{Page, check_publisher};
     use opencrs::report::{Options, Report};
     use opencrs::resolve::parse_ref;
     use opencrs::schema::SchemaOptions;
@@ -212,6 +213,35 @@ mod ops {
             Ok(d) => reply(&json!(d)),
             Err(e) => error(e),
         }
+    }
+
+    #[derive(Deserialize)]
+    struct PublisherReq {
+        domain: String,
+        pages: BTreeMap<String, Page>,
+        now: String,
+        #[serde(default)]
+        missing: String,
+    }
+
+    fn try_publisher(req: &[u8]) -> Result<Vec<u8>, Vec<u8>> {
+        let r: PublisherReq = parse(
+            req,
+            r#"{"domain": "...", "pages": {url: {"status", "body", ...}}, "now": "RFC 3339", "missing"?: "..."}"#,
+        )?;
+        let now = DateTime::parse_from_rfc3339(&r.now).map_err(error)?;
+        let missing = if r.missing.is_empty() {
+            "not fetched"
+        } else {
+            &r.missing
+        };
+        Ok(reply(&json!(check_publisher(
+            &r.domain, &r.pages, missing, now
+        ))))
+    }
+
+    pub fn publisher(req: &[u8]) -> Vec<u8> {
+        try_publisher(req).unwrap_or_else(|e| e)
     }
 
     pub fn rule_packs(_req: &[u8]) -> Vec<u8> {
@@ -438,6 +468,21 @@ mod ops {
         }
 
         #[test]
+        fn publisher_check() {
+            let v = val(publisher(
+                br#"{"domain":"harbourline.example","pages":{"https://harbourline.example/.well-known/opencrs.json":{"status":404}},"now":"2026-10-25T12:00:00Z"}"#,
+            ));
+            assert!(v["error"].as_str().unwrap().contains("HTTP 404"), "{v}");
+            assert_eq!(v["errors"], 1);
+            assert!(
+                val(publisher(b"{}"))["error"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("usage:")
+            );
+        }
+
+        #[test]
         fn bad_requests_are_errors() {
             assert!(val(probe_start(b"{}"))["error"].is_string());
             assert!(val(probe_feed(99, b"x"))["error"].is_string());
@@ -498,6 +543,7 @@ mod abi {
     op!(opencrs_legibility, ops::legibility);
     op!(opencrs_dwell, ops::dwell);
     op!(opencrs_rule_packs, ops::rule_packs);
+    op!(opencrs_publisher, ops::publisher);
     op!(opencrs_probe_start, ops::probe_start);
 
     #[unsafe(no_mangle)]
