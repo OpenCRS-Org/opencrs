@@ -261,7 +261,7 @@ The validator was first written in Go. The [differential tests](crates/opencrs-c
 
 ## Contributing
 
-OpenCRS is a draft, and it gets better with real spec sheets and real creative. [Open an issue](https://github.com/OpenCRS-Org/opencrs/issues) with what doesn't fit, or see [CONTRIBUTING.md](CONTRIBUTING.md) for proposals and pull requests. Commits are signed off under the [Developer Certificate of Origin](DCO). To report a security problem, see [SECURITY.md](SECURITY.md).
+OpenCRS is a draft, and it gets better with real spec sheets and real creative. [Open an issue](https://github.com/OpenCRS-Org/opencrs/issues) with what doesn't fit, or see [CONTRIBUTING.md](CONTRIBUTING.md) for proposals and pull requests. What comes next is in [ROADMAP.md](ROADMAP.md). Commits are signed off under the [Developer Certificate of Origin](DCO). To report a security problem, see [SECURITY.md](SECURITY.md).
 
 ## Licence
 
