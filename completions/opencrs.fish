@@ -43,6 +43,7 @@ complete -c opencrs -n "__fish_opencrs_using_subcommand check" -s h -l help -d '
 complete -c opencrs -n "__fish_opencrs_using_subcommand schema" -l kind -d 'Document kind (default: detect it)' -r
 complete -c opencrs -n "__fish_opencrs_using_subcommand schema" -l allow-local-http -d 'Accept http://localhost document URLs in an index'
 complete -c opencrs -n "__fish_opencrs_using_subcommand schema" -s h -l help -d 'Show help (--help shows more)'
+complete -c opencrs -n "__fish_opencrs_using_subcommand resolve" -l strictest -d 'Combine every screen the reference covers into one set of requirements'
 complete -c opencrs -n "__fish_opencrs_using_subcommand resolve" -s h -l help -d 'Show help (--help shows more)'
 complete -c opencrs -n "__fish_opencrs_using_subcommand fetch" -l token -d 'Bearer token for a publisher\'s partner documents, repeatable' -r
 complete -c opencrs -n "__fish_opencrs_using_subcommand fetch" -s o -l output -d 'Save trusted documents under this directory' -r
@@ -52,6 +53,7 @@ complete -c opencrs -n "__fish_opencrs_using_subcommand fetch" -s h -l help -d '
 complete -c opencrs -n "__fish_opencrs_using_subcommand conformance" -l level -d 'Level to test: core, layout or full' -r
 complete -c opencrs -n "__fish_opencrs_using_subcommand conformance" -l cmd -d 'External validator to test' -r
 complete -c opencrs -n "__fish_opencrs_using_subcommand conformance" -s v -l verbose -d 'List passing cases too'
+complete -c opencrs -n "__fish_opencrs_using_subcommand conformance" -l no-strictest -d 'Skip the cases for optional strictest requirements'
 complete -c opencrs -n "__fish_opencrs_using_subcommand conformance" -s h -l help -d 'Show help (--help shows more)'
 complete -c opencrs -n "__fish_opencrs_using_subcommand completion" -s h -l help -d 'Show help (--help shows more)'
 complete -c opencrs -n "__fish_opencrs_using_subcommand version" -s h -l help -d 'Show help (--help shows more)'

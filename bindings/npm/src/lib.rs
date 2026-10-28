@@ -13,6 +13,7 @@ use opencrs::probe::Probe;
 use opencrs::probe::probe_bytes;
 use opencrs::resolve::parse_ref;
 use opencrs::schema::SchemaOptions;
+use opencrs::strictest::Strictest;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -48,6 +49,15 @@ pub fn resolve(spec: String, r#ref: String) -> Result<Value> {
     let reqs = doc.resolve(&r).map_err(fail)?;
     let views: Vec<_> = reqs.iter().map(|r| r.view()).collect();
     to_value(&views)
+}
+
+/// Resolves a format or screen reference to one set of requirements for
+/// everything it covers: a file that meets it passes on every screen.
+#[napi(js_name = "resolveStrictest")]
+pub fn resolve_strictest(spec: String, r#ref: String) -> Result<Value> {
+    let s = opencrs::budget::ensure(spec.len(), || Strictest::from_text(spec.as_bytes(), &r#ref))
+        .map_err(fail)?;
+    serde_json::from_slice(&s.to_json()).map_err(fail)
 }
 
 /// What can be read from a file's own bytes: size, hash, type, pixels and

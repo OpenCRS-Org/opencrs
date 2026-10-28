@@ -7,6 +7,7 @@ use crate::io::{go_error, probe_file, read_file};
 use opencrs::batch::check_manifest;
 use opencrs::conformance::{Case, LEVELS, compare};
 use opencrs::report::Options;
+use opencrs::strictest::Strictest;
 use opencrs::{decode_document, decode_manifest, json};
 use std::collections::HashMap;
 use std::path::Path;
@@ -73,6 +74,9 @@ fn in_dir(c: &Case, name: &str) -> String {
 /// case directory are read; others are checked on the manifest's declared
 /// values.
 pub fn reference(c: &Case) -> Result<Vec<u8>, String> {
+    if !c.strictest.is_empty() {
+        return reference_strictest(c);
+    }
     let mut docs = Vec::new();
     for s in &c.specs {
         let raw = read_file(&in_dir(c, s)).map_err(|(_, e)| e)?;
@@ -96,9 +100,34 @@ pub fn reference(c: &Case) -> Result<Vec<u8>, String> {
     Ok(json::to_string(&reports).into_bytes())
 }
 
+/// The reference validator on a strictest case: the result of each entry's
+/// reference in the case's spec, or its error as `{"error": ...}`.
+fn reference_strictest(c: &Case) -> Result<Vec<u8>, String> {
+    let [spec] = c.specs.as_slice() else {
+        return Err("a strictest case needs one spec".into());
+    };
+    let raw = read_file(&in_dir(c, spec)).map_err(|(_, e)| e)?;
+    let mut out = String::from("[");
+    for (i, want) in c.strictest.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        let one =
+            opencrs::budget::ensure(raw.len(), || Strictest::from_text(&raw, &want.reference));
+        match one {
+            Ok(s) => out.push_str(&String::from_utf8_lossy(&s.to_json())),
+            Err(e) => out.push_str(&json::to_string(
+                &serde_json::json!({"error": e.to_string()}),
+            )),
+        }
+    }
+    out.push(']');
+    Ok(out.into_bytes())
+}
+
 /// Runs an external validator: `cmd` is run by the shell with the case
 /// directory as its last argument, and must print the reports as a JSON
-/// array on stdout. A validator may exit non-zero when creative fails; only
+/// array on stdout (for a strictest case, a result for each entry). A validator may exit non-zero when creative fails; only
 /// its output counts.
 pub fn command(cmd: &str) -> impl Fn(&Case) -> Result<Vec<u8>, String> {
     let cmd = cmd.to_string();

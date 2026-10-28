@@ -1,0 +1,27 @@
+{
+  "id": "core-strictest-pixels",
+  "level": "core",
+  "optional": "strictest",
+  "spec": "Inheritance: Strictest requirements",
+  "description": "A format whose screens have different pixel sizes (one overrides them) has no strictest requirements: no file fits both canvases. A reference to either screen alone still resolves.",
+  "specs": [
+    "screens.json"
+  ],
+  "strictest": [
+    {
+      "ref": "conf.example/n/f",
+      "error": "different pixel sizes"
+    },
+    {
+      "ref": "conf.example/n/screen/B",
+      "notes": 0,
+      "expect": {
+        "screens": 1,
+        "pixels": [
+          1080,
+          1920
+        ]
+      }
+    }
+  ]
+}

@@ -22,6 +22,7 @@ import opencrs
 opencrs.version()  # "0.1"
 opencrs.lint(text)  # {"kind": ..., "schema_errors": [...], "document_checks": [...]}
 opencrs.resolve(spec, "publisher.example/network/format")  # list of dicts
+opencrs.resolve_strictest(spec, "publisher.example/network/format")  # one dict for every screen at once
 opencrs.check([spec], manifest, {"a.png": probe})  # {"reports": [...], "notes": [...]}
 opencrs.check_dir(dir, [spec], manifest)  # adds "missing": probes the manifest's files in dir
 opencrs.probe("creative.png")  # {"sha256": ..., "bytes": ..., "media_type": ..., "pixels": [w, h]}

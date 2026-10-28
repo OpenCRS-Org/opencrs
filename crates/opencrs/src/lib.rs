@@ -20,12 +20,15 @@ pub mod load;
 pub mod model;
 pub mod packcheck;
 pub mod probe;
+#[cfg(test)]
+mod prop_strictest;
 pub mod publisher;
 pub mod report;
 pub mod resolve;
 pub mod rulepack;
 pub mod schema;
 pub mod stream;
+pub mod strictest;
 #[cfg(test)]
 mod testutil;
 

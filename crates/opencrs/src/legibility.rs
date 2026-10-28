@@ -17,10 +17,10 @@ pub enum TextClass {
     Legal,
 }
 
-const KEY_ROLES: [&str; 7] = [
+pub(crate) const KEY_ROLES: [&str; 7] = [
     "headline", "subhead", "body", "cta", "offer", "price", "text",
 ];
-const LEGAL_ROLES: [&str; 4] = ["legal", "disclaimer", "fine_print", "terms"];
+pub(crate) const LEGAL_ROLES: [&str; 4] = ["legal", "disclaimer", "fine_print", "terms"];
 
 /// Reports whether a role is key text, legal text, or not text at all (logos,
 /// images).

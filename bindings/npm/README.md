@@ -22,6 +22,7 @@ const opencrs = require("@opencrs/opencrs");
 opencrs.version(); // "0.1"
 opencrs.lint(text); // { kind, schema_errors?, document_checks? }
 opencrs.resolve(spec, "publisher.example/network/format"); // Requirements[]
+opencrs.resolveStrictest(spec, "publisher.example/network/format"); // one StrictestRequirements for every screen at once
 opencrs.check([spec], manifest, { "a.png": probe }); // { reports, notes }
 opencrs.checkDir(dir, [spec], manifest); // { reports, notes, missing }: probes the manifest's files in dir
 opencrs.probe("creative.png"); // { sha256, bytes, media_type, pixels? }

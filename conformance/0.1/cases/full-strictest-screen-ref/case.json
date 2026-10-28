@@ -1,0 +1,80 @@
+{
+  "id": "full-strictest-screen-ref",
+  "level": "full",
+  "optional": "strictest",
+  "spec": "Inheritance: Strictest requirements",
+  "description": "A reference to one screen gives that screen's own requirements, whatever the other screens of its format ask: here S2's own safe area, regions, sizes and limits, not S1's.",
+  "specs": [
+    "screens.json"
+  ],
+  "strictest": [
+    {
+      "ref": "conf.example/n/screen/S2",
+      "notes": 0,
+      "expect": {
+        "screens": 1,
+        "format": "f",
+        "pixels": [
+          1000,
+          2000
+        ],
+        "physical_mm": [
+          1000,
+          2000
+        ],
+        "media": {
+          "static": [
+            "image/png"
+          ],
+          "max_bytes": 1000
+        },
+        "safe_area": {
+          "top": 30,
+          "right": 20,
+          "bottom": 40,
+          "left": 10
+        },
+        "blocked_regions": [
+          {
+            "name": "clock",
+            "rect_px": [
+              0,
+              0,
+              100,
+              50
+            ]
+          }
+        ],
+        "viewing": {
+          "distance_m": [
+            2,
+            3
+          ],
+          "dwell_s": 6
+        },
+        "min_cap_height_px": {
+          "headline": 30,
+          "legal": 20
+        },
+        "rules": {
+          "max_words": 9,
+          "required_elements": [
+            {
+              "role": "legal",
+              "within_rect_px": [
+                0,
+                1800,
+                1000,
+                200
+              ]
+            }
+          ]
+        },
+        "sources": {
+          "safe_area.top": "S2",
+          "min_cap_height_px.headline": "S2"
+        }
+      }
+    }
+  ]
+}

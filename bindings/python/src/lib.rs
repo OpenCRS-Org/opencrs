@@ -10,6 +10,7 @@ use opencrs::probe::Probe;
 use opencrs::probe::probe_bytes;
 use opencrs::resolve::parse_ref;
 use opencrs::schema::SchemaOptions;
+use opencrs::strictest::Strictest;
 use pyo3::create_exception;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -49,6 +50,13 @@ fn resolve(spec: &str, r#ref: &str) -> PyResult<String> {
     let reqs = doc.resolve(&r).map_err(fail)?;
     let views: Vec<_> = reqs.iter().map(|r| r.view()).collect();
     to_json(&views)
+}
+
+#[pyfunction]
+fn resolve_strictest(spec: &str, r#ref: &str) -> PyResult<String> {
+    let s = opencrs::budget::ensure(spec.len(), || Strictest::from_text(spec.as_bytes(), r#ref))
+        .map_err(fail)?;
+    String::from_utf8(s.to_json()).map_err(fail)
 }
 
 #[pyfunction]
@@ -92,6 +100,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(version, m)?)?;
     m.add_function(wrap_pyfunction!(lint, m)?)?;
     m.add_function(wrap_pyfunction!(resolve, m)?)?;
+    m.add_function(wrap_pyfunction!(resolve_strictest, m)?)?;
     m.add_function(wrap_pyfunction!(probe, m)?)?;
     m.add_function(wrap_pyfunction!(probe_bytes_json, m)?)?;
     m.add_function(wrap_pyfunction!(check, m)?)?;

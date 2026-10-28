@@ -38,152 +38,16 @@ impl Resolved {
     /// [`decode_document`], then [`parse_ref`], then [`Document::resolve`];
     /// a budget that runs out is `CRS-TOO-COMPLEX: ` and the reason.
     pub fn from_text(raw: &[u8], reference: &str) -> Result<Resolved, Error> {
-        check_schema(Kind::Screens, raw)?;
-        // A document that can't be read a screen at a time (not UTF-8, a
-        // repeated key, a screen the model refuses) is resolved the
-        // ordinary way, which gives the exact error, or the same answer.
-        let Ok(text) = std::str::from_utf8(raw) else {
-            return Self::whole(raw, reference);
+        let mut sink = Collect {
+            out: Resolved {
+                groups: Vec::new(),
+                members: Vec::new(),
+            },
+            by_key: HashMap::new(),
+            key: Vec::new(),
         };
-        let Some(root) = serde_json::from_str::<Root>(text).ok() else {
-            return Self::whole(raw, reference);
-        };
-        let Some(head) = root.head() else {
-            return Self::whole(raw, reference);
-        };
-        let Ok(mut doc) = serde_json::from_str::<Document>(&head) else {
-            return Self::whole(raw, reference);
-        };
-        let mut lists = Vec::with_capacity(root.networks.len());
-        for net in &root.networks {
-            let Some((head, screens)) = net.without("screens", "[]") else {
-                return Self::whole(raw, reference);
-            };
-            let (Ok(shell), Some(screens)) = (serde_json::from_str::<Network>(&head), screens)
-            else {
-                return Self::whole(raw, reference);
-            };
-            doc.networks.push(shell);
-            lists.push(screens);
-        }
-        doc.size = raw.len();
-
-        // The reference is parsed now but judged after the screens are
-        // read, as a document that doesn't decode is the first error.
-        let r = parse_ref(reference);
-        let mut aim = r.as_ref().ok().and_then(|r| Aim::new(&doc, r).ok());
-        let mut out = Resolved {
-            groups: Vec::new(),
-            members: Vec::new(),
-        };
-        let mut cache = RuleCache::default();
-        let mut by_key: HashMap<Vec<u8>, u32> = HashMap::new();
-        let mut key = Vec::new();
-        let mut failed: Option<ResolveError> = None;
-        for (ni, list) in lists.iter().enumerate() {
-            let mut de = serde_json::Deserializer::from_str(list.get());
-            let mut each = |s: Screen| {
-                let Some(a) = aim.as_mut().filter(|a| a.network == ni && !a.done) else {
-                    return true;
-                };
-                let n = &doc.networks[ni];
-                match a.what {
-                    What::Screen(ref id) => {
-                        if s.id != *id {
-                            return true;
-                        }
-                        a.done = true;
-                        match doc.resolve_screen_in(&mut cache, n, &s, None) {
-                            Ok(req) => out.push(&req, &mut by_key, &mut key),
-                            Err(e) => failed = Some(e),
-                        }
-                    }
-                    What::Format(fi) => {
-                        let f = &n.formats[fi];
-                        if s.format != f.id {
-                            return true;
-                        }
-                        // Each reference to a format walks its screens.
-                        if !crate::budget::charge(
-                            crate::budget::Work::Screens,
-                            f as *const _ as usize,
-                            8,
-                        ) {
-                            a.done = true;
-                            return true;
-                        }
-                        match doc.resolve_screen_in(&mut cache, n, &s, Some(f)) {
-                            Ok(req) => {
-                                a.any = true;
-                                out.push(&req, &mut by_key, &mut key);
-                            }
-                            Err(e) => {
-                                failed = Some(e);
-                                a.done = true;
-                            }
-                        }
-                    }
-                }
-                true
-            };
-            let read = serde::de::DeserializeSeed::deserialize(
-                ScreenStream::<Screen>::new(&mut each),
-                &mut de,
-            );
-            if read.is_err() || de.end().is_err() {
-                return Self::whole(raw, reference);
-            }
-        }
-        let r = r?;
-        let a = Aim::new(&doc, &r)?;
-        if let Some(e) = failed {
-            return Err(e.into());
-        }
-        let n = &doc.networks[a.network];
-        match a.what {
-            What::Screen(ref id) if !aim.as_ref().is_some_and(|a| a.done) => {
-                return Err(ResolveError::Other(format!(
-                    "screen {} not found in network {}",
-                    crate::gofmt::quote(id),
-                    crate::gofmt::quote(&n.id)
-                ))
-                .into());
-            }
-            What::Format(fi)
-                if !aim.as_ref().is_some_and(|a| a.any) && !crate::budget::tripped() =>
-            {
-                let req = doc.build_with(&mut cache, n, &n.formats[fi], None, None);
-                out.push(&req, &mut by_key, &mut key);
-            }
-            _ => {}
-        }
-        if let Some(why) = crate::budget::explain(Some(&doc)) {
-            return Err(Error::Message(format!("{CODE_TOO_COMPLEX}: {why}")));
-        }
-        Ok(out)
-    }
-
-    /// The ordinary way: the whole document decoded and every screen's view
-    /// built. For documents that can't be streamed, so an error is the one
-    /// decoding gives.
-    fn whole(raw: &[u8], reference: &str) -> Result<Resolved, Error> {
-        let doc = decode_document(raw)?;
-        let r = parse_ref(reference)?;
-        let mut out = Resolved {
-            groups: Vec::new(),
-            members: Vec::new(),
-        };
-        let mut by_key = HashMap::new();
-        let mut key = Vec::new();
-        doc.resolve_each(&r, |req| {
-            if !crate::budget::tripped() {
-                out.push(&req, &mut by_key, &mut key);
-            }
-        })?;
-        if let Some(why) = crate::budget::explain(Some(&doc)) {
-            return Err(Error::Message(format!("{CODE_TOO_COMPLEX}: {why}")));
-        }
-        Ok(out)
+        walk(raw, reference, &mut sink)?;
+        Ok(sink.out)
     }
 
     /// Adds one result: its view is written as JSON if no screen of its kind
@@ -309,6 +173,167 @@ impl Resolved {
         out.extend_from_slice(b"]}");
         out
     }
+}
+
+/// What a walk over a reference's results does with each one.
+pub(crate) trait Sink {
+    /// Whether a screen is already covered by one seen before, so it needn't
+    /// be resolved at all. Asked of the screens of a format only.
+    fn skip(&mut self, _screen: &Screen) -> bool {
+        false
+    }
+
+    /// One result, in document order.
+    fn add(&mut self, req: &crate::resolve::Requirements<'_>);
+}
+
+/// The sink of [`Resolved`]: each result's view, written once for each kind.
+struct Collect {
+    out: Resolved,
+    by_key: HashMap<Vec<u8>, u32>,
+    key: Vec<u8>,
+}
+
+impl Sink for Collect {
+    fn add(&mut self, req: &crate::resolve::Requirements<'_>) {
+        self.out.push(req, &mut self.by_key, &mut self.key);
+    }
+}
+
+/// Resolves `reference` in the document `raw`, handing each result to `sink`
+/// as it is worked out, with the errors of [`Resolved::from_text`].
+pub(crate) fn walk(raw: &[u8], reference: &str, sink: &mut impl Sink) -> Result<(), Error> {
+    check_schema(Kind::Screens, raw)?;
+    // A document that can't be read a screen at a time (not UTF-8, a
+    // repeated key, a screen the model refuses) is resolved the
+    // ordinary way, which gives the exact error, or the same answer.
+    let Ok(text) = std::str::from_utf8(raw) else {
+        return whole(raw, reference, sink);
+    };
+    let Some(root) = serde_json::from_str::<Root>(text).ok() else {
+        return whole(raw, reference, sink);
+    };
+    let Some(head) = root.head() else {
+        return whole(raw, reference, sink);
+    };
+    let Ok(mut doc) = serde_json::from_str::<Document>(&head) else {
+        return whole(raw, reference, sink);
+    };
+    let mut lists = Vec::with_capacity(root.networks.len());
+    for net in &root.networks {
+        let Some((head, screens)) = net.without("screens", "[]") else {
+            return whole(raw, reference, sink);
+        };
+        let (Ok(shell), Some(screens)) = (serde_json::from_str::<Network>(&head), screens) else {
+            return whole(raw, reference, sink);
+        };
+        doc.networks.push(shell);
+        lists.push(screens);
+    }
+    doc.size = raw.len();
+
+    // The reference is parsed now but judged after the screens are
+    // read, as a document that doesn't decode is the first error.
+    let r = parse_ref(reference);
+    let mut aim = r.as_ref().ok().and_then(|r| Aim::new(&doc, r).ok());
+    let mut cache = RuleCache::default();
+    let mut failed: Option<ResolveError> = None;
+    for (ni, list) in lists.iter().enumerate() {
+        let mut de = serde_json::Deserializer::from_str(list.get());
+        let mut each = |s: Screen| {
+            let Some(a) = aim.as_mut().filter(|a| a.network == ni && !a.done) else {
+                return true;
+            };
+            let n = &doc.networks[ni];
+            match a.what {
+                What::Screen(ref id) => {
+                    if s.id != *id {
+                        return true;
+                    }
+                    a.done = true;
+                    match doc.resolve_screen_in(&mut cache, n, &s, None) {
+                        Ok(req) => sink.add(&req),
+                        Err(e) => failed = Some(e),
+                    }
+                }
+                What::Format(fi) => {
+                    let f = &n.formats[fi];
+                    if s.format != f.id {
+                        return true;
+                    }
+                    // Each reference to a format walks its screens.
+                    if !crate::budget::charge(
+                        crate::budget::Work::Screens,
+                        f as *const _ as usize,
+                        8,
+                    ) {
+                        a.done = true;
+                        return true;
+                    }
+                    if sink.skip(&s) {
+                        a.any = true;
+                        return true;
+                    }
+                    match doc.resolve_screen_in(&mut cache, n, &s, Some(f)) {
+                        Ok(req) => {
+                            a.any = true;
+                            sink.add(&req);
+                        }
+                        Err(e) => {
+                            failed = Some(e);
+                            a.done = true;
+                        }
+                    }
+                }
+            }
+            true
+        };
+        let read = serde::de::DeserializeSeed::deserialize(
+            ScreenStream::<Screen>::new(&mut each),
+            &mut de,
+        );
+        if read.is_err() || de.end().is_err() {
+            return whole(raw, reference, sink);
+        }
+    }
+    let r = r?;
+    let a = Aim::new(&doc, &r)?;
+    if let Some(e) = failed {
+        return Err(e.into());
+    }
+    let n = &doc.networks[a.network];
+    match a.what {
+        What::Screen(ref id) if !aim.as_ref().is_some_and(|a| a.done) => {
+            return Err(ResolveError::Other(format!(
+                "screen {} not found in network {}",
+                crate::gofmt::quote(id),
+                crate::gofmt::quote(&n.id)
+            ))
+            .into());
+        }
+        What::Format(fi) if !aim.as_ref().is_some_and(|a| a.any) && !crate::budget::tripped() => {
+            let req = doc.build_with(&mut cache, n, &n.formats[fi], None, None);
+            sink.add(&req);
+        }
+        _ => {}
+    }
+    if let Some(why) = crate::budget::explain(Some(&doc)) {
+        return Err(Error::Message(format!("{CODE_TOO_COMPLEX}: {why}")));
+    }
+    Ok(())
+}
+
+/// The ordinary way: the whole document decoded and every screen's view
+/// built. For documents that can't be streamed, so an error is the one
+/// decoding gives.
+fn whole(raw: &[u8], reference: &str, sink: &mut impl Sink) -> Result<(), Error> {
+    let doc = decode_document(raw)?;
+    let r = parse_ref(reference)?;
+    doc.resolve_each(&r, |req| sink.add(&req))?;
+    if let Some(why) = crate::budget::explain(Some(&doc)) {
+        return Err(Error::Message(format!("{CODE_TOO_COMPLEX}: {why}")));
+    }
+    Ok(())
 }
 
 /// What a reference asks of a document's shell: which network, and a

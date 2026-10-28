@@ -1,0 +1,47 @@
+{
+  "opencrs": "0.1",
+  "publisher": "conf.example",
+  "updated_at": "2026-10-20T09:00:00+11:00",
+  "expires_at": "2027-06-30T00:00:00+10:00",
+  "networks": [
+    {
+      "id": "n",
+      "name": "Strictest network",
+      "formats": [
+        {
+          "id": "f",
+          "pixels": [
+            1000,
+            2000
+          ],
+          "physical_mm": [
+            1000,
+            2000
+          ],
+          "media": {
+            "static": [
+              "image/png"
+            ],
+            "max_bytes": 1000
+          }
+        }
+      ],
+      "screens": [
+        {
+          "id": "A",
+          "format": "f"
+        },
+        {
+          "id": "B",
+          "format": "f",
+          "overrides": {
+            "pixels": [
+              1080,
+              1920
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

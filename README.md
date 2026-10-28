@@ -18,7 +18,7 @@
 <p align="center">
   <a href="https://github.com/OpenCRS-Org/opencrs/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/OpenCRS-Org/opencrs?color=5B4CF0&label=release"></a>
   <a href="https://opencrs.dev/spec/0.1/"><img alt="Spec 0.1 draft" src="https://img.shields.io/badge/spec-0.1%20draft-5B4CF0"></a>
-  <a href="conformance/"><img alt="Conformance: Full, 47 of 47" src="https://img.shields.io/badge/conformance-Full%20%C2%B7%2047%2F47-2ea44f"></a>
+  <a href="conformance/"><img alt="Conformance: Full, 48 of 48" src="https://img.shields.io/badge/conformance-Full%20%C2%B7%2048%2F48-2ea44f"></a>
   <a href="https://github.com/OpenCRS-Org/opencrs/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/OpenCRS-Org/opencrs/actions/workflows/ci.yml/badge.svg"></a>
   <br>
   <a href="https://www.npmjs.com/package/@opencrs/cli"><img alt="npm" src="https://img.shields.io/npm/v/@opencrs/cli?logo=npm&label=npx%20%40opencrs%2Fcli&color=121216"></a>
@@ -106,7 +106,7 @@ Every [release](https://github.com/OpenCRS-Org/opencrs/releases) has archives fo
 | --- | --- |
 | `opencrs check --spec SCREENS CREATIVE` | Checks each file a `creative.json` lists against every screen it targets. Repeat `--spec` for several publishers; `--json` prints reports in the spec's format. |
 | `opencrs schema FILE…` | Checks documents against the JSON Schemas, plus screens that name a missing format (`CRS-REFERENCE`) and rules inheritance has made impossible (`CRS-RULE-CONFLICT`). |
-| `opencrs resolve SCREENS REF` | Shows what one format or screen requires after inheritance, with minimum text sizes in mm and px and the word limit. |
+| `opencrs resolve SCREENS REF` | Shows what one format or screen requires after inheritance, with minimum text sizes in mm and px and the word limit. With `--strictest`, shows one set of requirements for everything the reference covers, so a single file passes on every screen. |
 | `opencrs fetch DOMAIN` | Reads a publisher's index, fetches its documents, follows delegates, and says which to trust and why. `--output DIR` saves the trusted ones. |
 | `opencrs conformance` | Runs the conformance suite against this validator, or against any other with `--cmd`. |
 | `opencrs completion SHELL` | Prints completions for bash, zsh, fish or PowerShell. |
@@ -216,7 +216,7 @@ for _, r := range res.Reports {
 | [`OpenCRS 0.1 Specification.md`](OpenCRS%200.1%20Specification.md) | The specification |
 | [`schema/0.1/`](schema/0.1/) | JSON Schemas (Draft 2020-12) for `index`, `screens`, `creative`, `report` and `rule-pack`, served at their `$id` on opencrs.dev |
 | [`examples/`](examples/) | The spec's complete Harbourline example, verbatim, with the reports the validator writes, and starter files |
-| [`conformance/`](conformance/) | 47 cases any validator can run to show it meets Core, Layout or Full ([how to write an adapter](conformance/README.md)) |
+| [`conformance/`](conformance/) | 48 cases (and 9 optional ones for strictest requirements) any validator can run to show it meets Core, Layout or Full ([how to write an adapter](conformance/README.md)) |
 | [`rulepacks/`](rulepacks/) | Regulatory rule packs, embedded in the validator |
 | [`crates/`](crates/) | The Rust library, CLI and WebAssembly module |
 | [`bindings/`](bindings/) | npm and Python packages over the Rust library |

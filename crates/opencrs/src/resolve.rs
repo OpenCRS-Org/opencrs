@@ -155,6 +155,19 @@ impl Requirements<'_> {
     }
 }
 
+/// What [`Requirements::key`] writes for a screen, worked out from the
+/// screen alone, before its requirements are built: the same bytes when the
+/// screen is keyed. A screen whose bytes were written by a keyed one before
+/// has the same requirements, so building them again can be skipped.
+pub(crate) fn screen_key(s: &Screen, out: &mut Vec<u8>) {
+    s.venue.key(out);
+    s.format.key(out);
+    s.placement.key(out);
+    s.viewing.key(out);
+    s.overrides.key(out);
+    s.rules.key(out);
+}
+
 /// Writes a value's content as bytes, such that two values write the same
 /// bytes only if they are the same in every way a check or a view can tell.
 /// Floats are written as their bits, so -0 and 0 differ as their JSON does.
@@ -1040,7 +1053,7 @@ fn describe_element(e: &RequiredElement) -> String {
 }
 
 /// The overlap of two rectangles; zero-sized if none.
-fn intersect(a: Rect, b: Rect) -> Rect {
+pub(crate) fn intersect(a: Rect, b: Rect) -> Rect {
     let (a, b) = (a.0, b.0);
     let (x0, y0) = (a[0].max(b[0]), a[1].max(b[1]));
     let (x1, y1) = (

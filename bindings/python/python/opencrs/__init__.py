@@ -22,6 +22,7 @@ __all__ = [
     "probe",
     "probe_bytes",
     "resolve",
+    "resolve_strictest",
     "version",
 ]
 
@@ -36,6 +37,10 @@ def lint(text: str) -> dict[str, Any]:
 
 def resolve(spec: str, ref: str) -> list[dict[str, Any]]:
     return json.loads(_native.resolve(spec, ref))
+
+
+def resolve_strictest(spec: str, ref: str) -> dict[str, Any]:
+    return json.loads(_native.resolve_strictest(spec, ref))
 
 
 def probe(path: str | os.PathLike[str]) -> dict[str, Any]:

@@ -1,0 +1,99 @@
+{
+  "opencrs": "0.1",
+  "publisher": "conf.example",
+  "updated_at": "2026-10-20T09:00:00+11:00",
+  "expires_at": "2027-06-30T00:00:00+10:00",
+  "networks": [
+    {
+      "id": "n",
+      "name": "Strictest network",
+      "formats": [
+        {
+          "id": "f",
+          "pixels": [
+            1000,
+            2000
+          ],
+          "physical_mm": [
+            1000,
+            2000
+          ],
+          "media": {
+            "static": [
+              "image/png"
+            ],
+            "max_bytes": 1000
+          },
+          "safe_area": {
+            "top": 10,
+            "right": 10,
+            "bottom": 10,
+            "left": 10
+          },
+          "rules": {
+            "legibility": {
+              "ratio": 100
+            },
+            "max_words": 9
+          }
+        }
+      ],
+      "screens": [
+        {
+          "id": "S1",
+          "format": "f",
+          "viewing": {
+            "distance_m": [
+              1,
+              9
+            ],
+            "dwell_s": 1
+          }
+        },
+        {
+          "id": "S2",
+          "format": "f",
+          "viewing": {
+            "distance_m": [
+              2,
+              3
+            ],
+            "dwell_s": 6
+          },
+          "overrides": {
+            "safe_area": {
+              "top": 30,
+              "right": 20,
+              "bottom": 40,
+              "left": 10
+            },
+            "blocked_regions": [
+              {
+                "name": "clock",
+                "rect_px": [
+                  0,
+                  0,
+                  100,
+                  50
+                ]
+              }
+            ]
+          },
+          "rules": {
+            "required_elements": [
+              {
+                "role": "legal",
+                "within_rect_px": [
+                  0,
+                  1800,
+                  1000,
+                  200
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

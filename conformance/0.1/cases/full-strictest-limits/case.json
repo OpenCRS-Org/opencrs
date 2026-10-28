@@ -1,0 +1,58 @@
+{
+  "id": "full-strictest-limits",
+  "level": "full",
+  "optional": "strictest",
+  "spec": "Inheritance: Strictest requirements",
+  "description": "Maxima take the smallest value and minima the largest, including a word limit worked out from dwell; restricted categories are added together; motion limits take the stricter value from whichever screen has it.",
+  "specs": [
+    "screens.json"
+  ],
+  "strictest": [
+    {
+      "ref": "conf.example/n/f",
+      "notes": 0,
+      "expect": {
+        "screens": 3,
+        "media": {
+          "static": [
+            "image/png"
+          ],
+          "motion": [
+            "video/mp4"
+          ],
+          "max_bytes": 600,
+          "fps": 25,
+          "slot_s": 10
+        },
+        "rules": {
+          "max_words": 4,
+          "restricted_categories": [
+            "IAB7",
+            "IAB8"
+          ],
+          "motion": {
+            "max_flash_hz": 2,
+            "min_frame_hold_s": 1
+          },
+          "brightness": {
+            "max_night_cd_m2": 200
+          },
+          "playback": {
+            "min_dwell_s": 6,
+            "max_transition_s": 0.5
+          }
+        },
+        "viewing": {
+          "dwell_s": 2
+        },
+        "sources": {
+          "media.max_bytes": "B",
+          "media.fps": "B",
+          "rules.max_words": "C",
+          "rules.motion.max_flash_hz": "B",
+          "rules.playback.min_dwell_s": "B"
+        }
+      }
+    }
+  ]
+}

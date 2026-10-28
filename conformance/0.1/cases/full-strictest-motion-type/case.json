@@ -1,0 +1,28 @@
+{
+  "id": "full-strictest-motion-type",
+  "level": "full",
+  "optional": "strictest",
+  "spec": "Inheritance: Strictest requirements",
+  "description": "image/gif is listed as a static type by both screens and as a motion type by one. That screen treats a gif as motion, so the strictest result lists it as motion, not as static.",
+  "specs": [
+    "screens.json"
+  ],
+  "strictest": [
+    {
+      "ref": "conf.example/n/f",
+      "notes": 0,
+      "expect": {
+        "screens": 2,
+        "media": {
+          "static": [
+            "image/png"
+          ],
+          "motion": [
+            "image/gif"
+          ],
+          "slot_s": 10
+        }
+      }
+    }
+  ]
+}

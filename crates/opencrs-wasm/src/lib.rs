@@ -10,12 +10,13 @@
 //! holds an escaped copy beside the decoded one:
 //!
 //! - `opencrs_lint`: the request is the document itself.
-//! - `opencrs_check` and `opencrs_resolve`: the request is a frame, a
+//! - `opencrs_check`, `opencrs_resolve` and `opencrs_resolve_strictest`: the request is a frame, a
 //!   little-endian u32 `n`, then `n` bytes of JSON header, then the
 //!   documents back to back. The header's `blobs` lists their lengths.
-//!   `check` takes the manifest, then each spec; `resolve` takes the spec.
+//!   `check` takes the manifest, then each spec; `resolve` and
+//!   `resolve_strictest` take the spec.
 //!
-//! `check` and `resolve` take ownership of the request: the module frees it
+//! `check`, `resolve` and `resolve_strictest` take ownership of the request: the module frees it
 //! as soon as the documents are decoded, and the caller must not free it.
 //! The operations themselves are ordinary functions over byte slices (the
 //! `ops` module), so they are tested natively; `abi` is the thin layer of
@@ -36,6 +37,7 @@ mod ops {
     use opencrs::resolve::parse_ref;
     use opencrs::schema::SchemaOptions;
     use opencrs::stream::Resolved;
+    use opencrs::strictest::Strictest;
     use serde::{Deserialize, Serialize};
     use serde_json::{Value, json};
     use std::cell::RefCell;
@@ -232,6 +234,33 @@ mod ops {
 
     pub fn resolve(req: Vec<u8>) -> Vec<u8> {
         try_resolve(req).unwrap_or_else(|e| e)
+    }
+
+    #[derive(Deserialize)]
+    struct StrictestReq {
+        #[serde(rename = "ref")]
+        reference: String,
+    }
+
+    fn try_resolve_strictest(req: Vec<u8>) -> Result<Vec<u8>, Vec<u8>> {
+        let bytes = req.len();
+        opencrs::budget::ensure(bytes, || {
+            // As `resolve`: the spec is read a screen at a time, and the
+            // request is freed before the answer is written.
+            let strictest = {
+                let f: Frame<StrictestReq> = frame(&req, r#"{"ref": "...", "blobs": [spec]}"#)?;
+                let [spec] = f.blobs.as_slice() else {
+                    return Err(error("usage: resolve_strictest needs one spec"));
+                };
+                Strictest::from_text(spec, &f.header.reference).map_err(error)?
+            };
+            drop(req);
+            Ok(strictest.to_json())
+        })
+    }
+
+    pub fn resolve_strictest(req: Vec<u8>) -> Vec<u8> {
+        try_resolve_strictest(req).unwrap_or_else(|e| e)
     }
 
     #[derive(Deserialize)]
@@ -479,6 +508,11 @@ mod ops {
 
             let v = val(resolve(framed(json!({"ref": t}), &[&spec])));
             assert_eq!(v.as_array().unwrap().len(), 2);
+            let v = val(resolve_strictest(framed(json!({"ref": t}), &[&spec])));
+            assert_eq!(v["screens"], 2);
+            assert_eq!(v["ref"], t);
+            let r = framed(json!({"ref": "nonsense"}), &[&spec]);
+            assert!(val(resolve_strictest(r))["error"].is_string());
             let r = framed(json!({"ref": "nonsense"}), &[&spec]);
             assert!(val(resolve(r))["error"].is_string());
             let r = framed(json!({"now": ""}), &[b"{}"]);
@@ -487,6 +521,7 @@ mod ops {
             for bad in [&b""[..], b"\xff\xff\xff\xff{}", b"\x02\0\0\0{}"] {
                 assert!(val(check(bad.to_vec()))["error"].is_string());
                 assert!(val(resolve(bad.to_vec()))["error"].is_string());
+                assert!(val(resolve_strictest(bad.to_vec()))["error"].is_string());
             }
             let r = framed(json!({"now": "2026-10-22T12:00:00+11:00"}), &[b"{}"]);
             let mut short = r.clone();
@@ -674,6 +709,7 @@ mod abi {
     op!(opencrs_lint, ops::lint);
     consuming!(opencrs_check, ops::check);
     consuming!(opencrs_resolve, ops::resolve);
+    consuming!(opencrs_resolve_strictest, ops::resolve_strictest);
     op!(opencrs_legibility, ops::legibility);
     op!(opencrs_dwell, ops::dwell);
     op!(opencrs_rule_packs, ops::rule_packs);

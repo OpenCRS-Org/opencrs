@@ -2,6 +2,7 @@ package opencrs
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -449,5 +450,49 @@ func TestPanickingReaderDoesNotPoolTheInstance(t *testing.T) {
 	}
 	if got := Version(); got != "0.1" {
 		t.Errorf("Version() = %q", got)
+	}
+}
+
+func TestResolveStrictest(t *testing.T) {
+	spec := harbourline(t, "retail.screens.json")
+	both, err := ResolveStrictest(spec, "harbourline.example/retail/portrait-totem-75")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if both.Screens != 2 || both.Ref != "harbourline.example/retail/portrait-totem-75" || both.Pixels != [2]int{1080, 1920} {
+		t.Errorf("got %+v", both)
+	}
+	// The farther totem (3-10 m) sets the text size: the spec's 77 px.
+	if both.MinCapHeightPX["headline"] != 77 || both.Sources["min_cap_height_px.headline"] != "HC-L1-002" {
+		t.Errorf("headline %d from %q", both.MinCapHeightPX["headline"], both.Sources["min_cap_height_px.headline"])
+	}
+	if both.SafeArea == nil || both.SafeArea.Top != 120 || len(both.BlockedRegions) != 2 {
+		t.Errorf("layout: %+v %+v", both.SafeArea, both.BlockedRegions)
+	}
+	one, err := ResolveStrictest(spec, "harbourline.example/retail/screen/HC-L1-002")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if one.Screens != 1 || !reflect.DeepEqual(one.MinCapHeightPX, both.MinCapHeightPX) {
+		t.Errorf("a screen's own: %+v", one)
+	}
+	if _, err := ResolveStrictest(spec, "harbourline.example/retail/nope"); err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Errorf("unknown format: %v", err)
+	}
+	if _, err := ResolveStrictest([]byte("{}"), "a.example/n/f"); err == nil {
+		t.Error("an unreadable document should be an error")
+	}
+}
+
+func TestResolveStrictestContext(t *testing.T) {
+	spec := harbourline(t, "retail.screens.json")
+	ref := "harbourline.example/retail/portrait-totem-75"
+	if _, err := ResolveStrictestContext(context.Background(), spec, ref); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := ResolveStrictestContext(ctx, spec, ref); !errors.Is(err, context.Canceled) {
+		t.Errorf("got %v, want context.Canceled", err)
 	}
 }

@@ -66,6 +66,25 @@ class Requirements(TypedDict):
 
 def resolve(spec: str, ref: str) -> list[Requirements]: ...
 
+class StrictestRequirements(TypedDict):
+    ref: str
+    screens: int
+    format: str
+    pixels: list[int]
+    physical_mm: NotRequired[list[float]]
+    media: dict[str, Any]
+    safe_area: NotRequired[dict[str, int]]
+    blocked_regions: NotRequired[list[Region]]
+    segments: NotRequired[list[dict[str, Any]]]
+    viewing: NotRequired[dict[str, Any]]
+    min_cap_height_px: NotRequired[dict[str, int]]
+    rules: NotRequired[dict[str, Any]]
+    conditional_elements_left_out: NotRequired[list[dict[str, Any]]]
+    notes: NotRequired[list[str]]
+    sources: dict[str, str]
+
+def resolve_strictest(spec: str, ref: str) -> StrictestRequirements: ...
+
 class Report(TypedDict):
     opencrs: str
     validator: dict[str, str]

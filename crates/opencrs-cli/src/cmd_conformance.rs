@@ -37,15 +37,17 @@ pub fn run(a: &ConformanceArgs, stdout: &mut dyn Write, stderr: &mut dyn Write) 
     } else {
         (&external, cmd.clone())
     };
+    let cases: Vec<_> = cases
+        .into_iter()
+        .filter(|c| !(a.no_strictest && c.is_optional()))
+        .collect();
     let results = run_cases(&cases, &level, v);
-    let mut passed = 0;
-    for r in &results {
+    let show = |stdout: &mut dyn Write, r: &crate::conformance::CaseResult| {
         if r.passed() {
-            passed += 1;
             if verbose {
                 let _ = writeln!(stdout, "pass  {:<34} {}", r.case.id, r.case.description);
             }
-            continue;
+            return;
         }
         let _ = writeln!(stdout, "FAIL  {:<34} {}", r.case.id, r.case.description);
         let _ = writeln!(stdout, "      spec: {}", r.case.spec);
@@ -55,8 +57,13 @@ pub fn run(a: &ConformanceArgs, stdout: &mut dyn Write, stderr: &mut dyn Write) 
         for p in &r.problems {
             let _ = writeln!(stdout, "      {p}");
         }
+    };
+    for r in &results {
+        show(stdout, r);
     }
-    let verdict = if passed < results.len() {
+    let (optional, required): (Vec<_>, Vec<_>) = results.iter().partition(|r| r.case.is_optional());
+    let passed = required.iter().filter(|r| r.passed()).count();
+    let verdict = if passed < required.len() {
         "does not conform"
     } else {
         "conforms"
@@ -65,7 +72,24 @@ pub fn run(a: &ConformanceArgs, stdout: &mut dyn Write, stderr: &mut dyn Write) 
         stdout,
         "{name} {verdict} at the {} level: {passed} of {} cases pass",
         title(&level),
-        results.len()
+        required.len()
     );
-    i32::from(passed < results.len())
+    let mut failed = passed < required.len();
+    if a.no_strictest {
+        let _ = writeln!(stdout, "Strictest requirements (optional) were not tested");
+    } else if !optional.is_empty() {
+        let ok = optional.iter().filter(|r| r.passed()).count();
+        let verdict = if ok < optional.len() {
+            "does not support"
+        } else {
+            "supports"
+        };
+        let _ = writeln!(
+            stdout,
+            "{name} {verdict} strictest requirements (optional): {ok} of {} cases pass",
+            optional.len()
+        );
+        failed |= ok < optional.len();
+    }
+    i32::from(failed)
 }

@@ -89,6 +89,21 @@ test("resolve errors throw Error with the core's message", () => {
   });
 });
 
+test("resolveStrictest combines the screens of a format", () => {
+  const s = opencrs.resolveStrictest(spec(), "harbourline.example/retail/portrait-totem-75");
+  assert.equal(s.screens, 2);
+  assert.equal(s.ref, "harbourline.example/retail/portrait-totem-75");
+  // The farther totem sets the text size.
+  assert.equal(s.min_cap_height_px.headline, 77);
+  assert.equal(s.sources["min_cap_height_px.headline"], "HC-L1-002");
+  const one = opencrs.resolveStrictest(spec(), "harbourline.example/retail/screen/HC-L1-002");
+  assert.equal(one.screens, 1);
+  assert.deepEqual(one.min_cap_height_px, s.min_cap_height_px);
+  assert.throws(() => opencrs.resolveStrictest(spec(), "a/b"), {
+    message: '"a/b" is not a format or screen reference',
+  });
+});
+
 test("probe reads a file's own header", () => {
   const p = opencrs.probe(join(harbourline, "lunch-portrait.png"));
   assert.equal(p.media_type, "image/png");
@@ -153,6 +168,23 @@ test("check keeps the offset of now and defaults to the host time", () => {
   assert.match(now.reports[0].checked_at, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(Z|[+-]\d\d:\d\d)$/);
 });
 
+// What a strictest case expects: objects by the members it gives, lists exactly.
+const within = (want, got, at) => {
+  if (want === null || want === undefined) return;
+  if (Array.isArray(want)) {
+    assert.ok(Array.isArray(got) && got.length === want.length, `${at}: ${JSON.stringify(got)}, want ${JSON.stringify(want)}`);
+    want.forEach((w, i) => within(w, got[i], `${at}[${i}]`));
+  } else if (typeof want === "object") {
+    assert.equal(typeof got, "object", at);
+    for (const [k, v] of Object.entries(want)) {
+      assert.ok(k in got, `${at}.${k} is missing`);
+      within(v, got[k], `${at}.${k}`);
+    }
+  } else {
+    assert.equal(got, want, at);
+  }
+};
+
 test("checkDir passes every conformance case", () => {
   const cases = join(root, "conformance/0.1/cases");
   const names = readdirSync(cases).sort();
@@ -161,6 +193,23 @@ test("checkDir passes every conformance case", () => {
     const dir = join(cases, name);
     const c = JSON.parse(text(join(dir, "case.json")));
     const specs = c.specs.map((s) => text(join(dir, s)));
+    if (c.strictest?.length) {
+      for (const want of c.strictest) {
+        if (want.error) {
+          assert.throws(() => opencrs.resolveStrictest(specs[0], want.ref), { message: new RegExp(want.error) }, name);
+          continue;
+        }
+        const got = opencrs.resolveStrictest(specs[0], want.ref);
+        assert.ok(want.expect !== undefined || want.notes !== undefined, `${name}: the case expects nothing`);
+        within(want.expect, got, `${name} ${want.ref}`);
+        for (const path of want.absent ?? []) {
+          const at = path.split(".").reduce((v, k) => v?.[k], got);
+          assert.equal(at, undefined, `${name}: ${path} is there`);
+        }
+        if (want.notes !== undefined) assert.equal((got.notes ?? []).length, want.notes, name);
+      }
+      continue;
+    }
     const { reports } = opencrs.checkDir(dir, specs, text(join(dir, c.creative)), c.now);
     assert.equal(reports.length, c.expect.length, name);
     for (const want of c.expect) {

@@ -1,0 +1,89 @@
+{
+  "opencrs": "0.1",
+  "publisher": "conf.example",
+  "updated_at": "2026-10-20T09:00:00+11:00",
+  "expires_at": "2027-06-30T00:00:00+10:00",
+  "networks": [
+    {
+      "id": "n",
+      "name": "Strictest network",
+      "formats": [
+        {
+          "id": "f",
+          "pixels": [
+            1000,
+            2000
+          ],
+          "physical_mm": [
+            1000,
+            2000
+          ],
+          "media": {
+            "static": [
+              "image/png",
+              "image/jpeg"
+            ],
+            "motion": [
+              "video/mp4"
+            ],
+            "codecs": [
+              "h264",
+              "vp9"
+            ]
+          }
+        },
+        {
+          "id": "g",
+          "pixels": [
+            1000,
+            2000
+          ],
+          "physical_mm": [
+            1000,
+            2000
+          ],
+          "media": {
+            "static": [
+              "image/png"
+            ]
+          }
+        }
+      ],
+      "screens": [
+        {
+          "id": "A",
+          "format": "f"
+        },
+        {
+          "id": "B",
+          "format": "f",
+          "overrides": {
+            "media": {
+              "static": [
+                "image/png"
+              ],
+              "codecs": [
+                "h264"
+              ]
+            }
+          }
+        },
+        {
+          "id": "C",
+          "format": "g"
+        },
+        {
+          "id": "D",
+          "format": "g",
+          "overrides": {
+            "media": {
+              "static": [
+                "image/jpeg"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

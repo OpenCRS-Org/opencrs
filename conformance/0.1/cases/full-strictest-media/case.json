@@ -1,0 +1,40 @@
+{
+  "id": "full-strictest-media",
+  "level": "full",
+  "optional": "strictest",
+  "spec": "Inheritance: Strictest requirements",
+  "description": "File types and codecs are those every screen accepts. Where the screens of a format share no file type, the list is empty and a note says no single file can satisfy every screen.",
+  "specs": [
+    "screens.json"
+  ],
+  "strictest": [
+    {
+      "ref": "conf.example/n/f",
+      "notes": 0,
+      "expect": {
+        "screens": 2,
+        "media": {
+          "static": [
+            "image/png"
+          ],
+          "motion": [
+            "video/mp4"
+          ],
+          "codecs": [
+            "h264"
+          ]
+        }
+      }
+    },
+    {
+      "ref": "conf.example/n/g",
+      "notes": 1,
+      "expect": {
+        "screens": 2,
+        "media": {
+          "static": []
+        }
+      }
+    }
+  ]
+}
