@@ -136,7 +136,7 @@ Save trusted documents, exactly as served, under this directory. The files are r
 Print the result as JSON
 .TP
 \fB\-\-allow\-local\-http\fR
-Local testing: allow http:// and connections to localhost, 127.0.0.1 and [::1]. Other internal addresses stay refused.
+Local testing: allow http:// and connections to localhost, 127.0.0.1 and [::1]. Other internal addresses stay refused. It applies only when the domain you give is itself on localhost: a public publisher that lists or redirects to localhost gets nothing from it.
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Show help (\-\-help shows more)
@@ -490,7 +490,7 @@ Ignored by fetch and publisher. A proxy would resolve host names where the addre
 Only fetch and publisher use the network, and they share one HTTP client. It is built so that an index cannot point it at a service on the machine or its network.
 .TP
 \fBScheme\fR
-Only https:// URLs are fetched. With fetch \-\-allow\-local\-http, http:// is allowed for localhost, 127.0.0.1 and [::1] only.
+Only https:// URLs are fetched. With fetch \-\-allow\-local\-http, http:// is allowed for localhost, 127.0.0.1 and [::1] only, and only for a domain that is itself one of them: a public publisher can\*(Aqt use it to reach localhost.
 .TP
 \fBAddresses\fR
 Each host, redirects included, is resolved once and refused if any of its addresses is loopback, private, link\-local, shared (CGNAT), multicast, broadcast, unspecified, reserved or for documentation. The connection goes to the addresses that were checked. With \-\-allow\-local\-http, loopback is allowed for localhost, 127.0.0.1 and [::1] only; other internal addresses stay refused.
@@ -505,7 +505,7 @@ Each request, redirects included, must finish within 30 seconds.
 A document larger than 50 MiB (52428800 bytes) is refused. One discovery reads at most 512 MiB in total, indexes and documents together.
 .TP
 \fBPublisher check\fR
-publisher fetches one URL at a time and allows each request 2 minutes, redirects included. It reads at most 4000 URLs, 50 MiB for one page and 180 MiB in all; a URL past a limit is reported as not fetched.
+publisher fetches one URL at a time and allows each request 2 minutes, redirects included, and the whole check 5. It reads at most 4000 URLs, 50 MiB for one page and 180 MiB in all (counting what comes over the wire and again once decompressed); a URL past a limit, or not fetched by the time the 5 minutes are up, is reported as not fetched.
 .TP
 \fBIndex entries\fR
 An index may list at most 1000 documents, and at most 1000 delegates.

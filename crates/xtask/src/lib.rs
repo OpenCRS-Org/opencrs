@@ -278,7 +278,9 @@ fn extra_sections() -> Vec<u8> {
         &mut r,
         "Scheme",
         "Only https:// URLs are fetched. With fetch --allow-local-http, \
-         http:// is allowed for localhost, 127.0.0.1 and [::1] only.",
+         http:// is allowed for localhost, 127.0.0.1 and [::1] only, and \
+         only for a domain that is itself one of them: a public publisher \
+         can't use it to reach localhost.",
     );
     tagged(
         &mut r,
@@ -313,9 +315,11 @@ fn extra_sections() -> Vec<u8> {
         &mut r,
         "Publisher check",
         "publisher fetches one URL at a time and allows each request 2 \
-         minutes, redirects included. It reads at most 4000 URLs, 50 MiB for \
-         one page and 180 MiB in all; a URL past a limit is reported as not \
-         fetched.",
+         minutes, redirects included, and the whole check 5. It reads at \
+         most 4000 URLs, 50 MiB for one page and 180 MiB in all (counting \
+         what comes over the wire and again once decompressed); a URL past a \
+         limit, or not fetched by the time the 5 minutes are up, is reported \
+         as not fetched.",
     );
     tagged(
         &mut r,

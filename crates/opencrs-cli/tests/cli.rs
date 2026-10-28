@@ -901,3 +901,35 @@ fn publisher_command_without_a_publisher() {
     let (code, _, _) = run_cli(&["publisher"]);
     assert_eq!(code, 2);
 }
+
+/// A publisher's own text can't send a terminal escape sequences through
+/// `fetch`; the JSON form is already escaped.
+#[test]
+fn fetch_shows_control_characters_in_a_publishers_text() {
+    let srv = Server::start(move |r, addr| match r.path.as_str() {
+        "/.well-known/opencrs.json" => Resp::ok(format!(
+            r#"{{"opencrs":"0.1","publisher":{{"id":"harbourline.example","name":"Harb\u001b]0;pwned\u0007\u001b[2Jline"}},
+		  "documents":[{{"url":"http://{addr}/retail.screens.json","network":"retail"}}]}}"#
+        )),
+        _ => Resp::status(404),
+    });
+    let (code, out, err) = run_cli(&["fetch", "-allow-local-http", &srv.addr]);
+    assert_eq!(code, 1, "{err}");
+    assert!(
+        !out.contains('\u{1b}') && !out.contains('\u{7}'),
+        "raw controls in {out:?}"
+    );
+    assert!(
+        out.contains("Harb\\u001b]0;pwned\\u0007\\u001b[2Jline"),
+        "{out:?}"
+    );
+    let (_, out, _) = run_cli(&["fetch", "-allow-local-http", "--json", &srv.addr]);
+    assert!(!out.contains('\u{1b}'), "{out:?}");
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert!(
+        v["result"]["index"]["publisher"]["name"]
+            .as_str()
+            .unwrap()
+            .contains('\u{1b}')
+    );
+}

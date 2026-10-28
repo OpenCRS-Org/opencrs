@@ -563,7 +563,7 @@ def test_discover_reads_a_local_publisher_and_lets_other_threads_run():
         t = threading.Thread(target=count)
         t.start()
         try:
-            res = opencrs.discover(srv.addr, allow_local_http=True, now=NOW)
+            res = opencrs.discover(srv.addr, unsafe_allow_local_http=True, now=NOW)
         finally:
             stop.set()
             t.join()
@@ -583,4 +583,61 @@ def test_discover_reads_a_local_publisher_and_lets_other_threads_run():
         assert "/.well-known/opencrs.json" in srv.seen
     # An index that can't be fetched raises.
     with pytest.raises(opencrs.OpenCRSError):
-        opencrs.discover("127.0.0.1:1", allow_local_http=True)
+        opencrs.discover("127.0.0.1:1", unsafe_allow_local_http=True)
+
+
+def test_huge_or_odd_numbers_in_options_are_clamped_or_errors_not_panics():
+    # Clamped: these ask for more than allowed, which is the most allowed.
+    res = opencrs.fetch_publisher(
+        "not a domain",
+        max_document_bytes=2**64 - 1,
+        max_total_bytes=10**30,
+        max_rounds=2**64 - 1,
+        max_pages=10**30,
+        timeout=1e300,
+        total_timeout=1e300,
+        now=NOW,
+    )
+    assert "isn't a publisher domain" in res["error"]
+    # Errors, as ValueError: not numbers of seconds, or negative.
+    for bad in (float("nan"), float("inf"), -1.0):
+        with pytest.raises(opencrs.OpenCRSError, match="number of seconds"):
+            opencrs.fetch_publisher("not a domain", timeout=bad)
+        with pytest.raises(ValueError, match="number of seconds"):
+            opencrs.fetch_publisher("not a domain", total_timeout=bad)
+        with pytest.raises(opencrs.OpenCRSError, match="number of seconds"):
+            opencrs.discover("not a domain", timeout=bad)
+    for name in ("max_document_bytes", "max_total_bytes", "max_rounds", "max_pages"):
+        with pytest.raises(opencrs.OpenCRSError, match="zero or more"):
+            opencrs.fetch_publisher("not a domain", **{name: -1})
+
+
+def test_the_total_time_limit_stops_a_publisher_that_never_finishes():
+    class Drip(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Length", "100000000")
+            self.end_headers()
+            try:
+                while True:
+                    self.wfile.write(b" ")
+                    self.wfile.flush()
+                    time.sleep(0.02)
+            except OSError:
+                pass
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Drip)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    addr = f"127.0.0.1:{server.server_address[1]}"
+    try:
+        t = time.monotonic()
+        with pytest.raises(opencrs.OpenCRSError, match="time limit for the whole check"):
+            opencrs.discover(addr, unsafe_allow_local_http=True, total_timeout=0.5, now=NOW)
+        took = time.monotonic() - t
+        assert 0.4 <= took < 3, f"took {took:.2f} s"
+    finally:
+        server.shutdown()
+        server.server_close()

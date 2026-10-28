@@ -491,7 +491,9 @@ pub struct FetchArgs {
     #[arg(
         long = "allow-local-http",
         long_help = "Local testing: allow http:// and connections to localhost, \
-            127.0.0.1 and [::1]. Other internal addresses stay refused."
+            127.0.0.1 and [::1]. Other internal addresses stay refused. It applies \
+            only when the domain you give is itself on localhost: a public \
+            publisher that lists or redirects to localhost gets nothing from it."
     )]
     pub allow_local_http: bool,
 }

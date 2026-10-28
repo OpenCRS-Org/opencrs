@@ -1,6 +1,8 @@
 package opencrs
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -278,5 +280,70 @@ func TestFetchPublisherLoop(t *testing.T) {
 	cancel()
 	if _, err := FetchPublisher(ctx, "p.example", fixedNow, &FetchOptions{Client: client}); !errors.Is(err, context.Canceled) {
 		t.Errorf("cancelled: %v", err)
+	}
+}
+
+// A page that is too big, or is compressed and never ends, still costs what
+// it read, and FetchPublisher counts that against its total.
+func TestFetchPageCountsWhatItReadHoweverItEnded(t *testing.T) {
+	gz := func(b []byte) []byte {
+		var buf bytes.Buffer
+		zw := gzip.NewWriter(&buf)
+		zw.Write(b)
+		zw.Close()
+		return buf.Bytes()
+	}
+	srv, c := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/big":
+			fmt.Fprint(w, strings.Repeat("x", 10000))
+		case "/blocks":
+			// Gzip, then twenty thousand empty stored blocks: nothing ever
+			// decodes, and it never ends.
+			b := []byte{0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 0xff}
+			for range 20000 {
+				b = append(b, 0, 0, 0, 0xff, 0xff)
+			}
+			w.Header().Set("Content-Encoding", "gzip")
+			w.Write(b)
+		case "/bomb":
+			w.Header().Set("Content-Encoding", "gzip")
+			w.Write(gz(bytes.Repeat([]byte("x"), 1<<20)))
+		case "/two":
+			w.Header().Set("Content-Encoding", "gzip")
+			w.Write(append(gz([]byte(`{"a":`)), gz([]byte(`1}`))...))
+		case "/garbage":
+			w.Header().Set("Content-Encoding", "gzip")
+			w.Write(append(gz([]byte(`{}`)), "garbage-after-the-member"...))
+		}
+	}))
+	fetch := func(path string) (Page, int64) {
+		return fetchPage(context.Background(), c, WantedURL{URL: srv.URL + path}, 1000)
+	}
+	if p, n := fetch("/big"); !strings.Contains(p.Error, "larger than the 1000-byte limit") || n < 1001 {
+		t.Errorf("/big: %+v after %d bytes", p, n)
+	}
+	// Capped near the limit plus a little, not the hundred kilobytes sent.
+	if p, n := fetch("/blocks"); !strings.Contains(p.Error, "larger than the 1000-byte limit") || n < 4000 || n > 20000 {
+		t.Errorf("/blocks: %+v after %d bytes", p, n)
+	}
+	if p, n := fetch("/bomb"); !strings.Contains(p.Error, "larger than") || n <= 1001 {
+		t.Errorf("/bomb: %+v after %d bytes", p, n)
+	}
+	// Every member is read, and anything after them is an error.
+	if p, _ := fetch("/two"); p.Error != "" || p.Body != `{"a":1}` {
+		t.Errorf("/two: %+v", p)
+	}
+	if p, _ := fetch("/garbage"); p.Error == "" {
+		t.Errorf("/garbage: %+v", p)
+	}
+}
+
+func TestAzureWireServerIsRefused(t *testing.T) {
+	if got := refusedAddress(netip.MustParseAddr("168.63.129.16")); !strings.Contains(got, "metadata") {
+		t.Errorf("168.63.129.16: refused as %q", got)
+	}
+	if got := refusedAddress(netip.MustParseAddr("168.63.129.17")); got != "" {
+		t.Errorf("168.63.129.17: refused as %q", got)
 	}
 }

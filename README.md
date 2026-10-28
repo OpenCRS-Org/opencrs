@@ -244,7 +244,7 @@ The blanks are deliberate, and each is listed with its reason in [`parity/operat
 
 That file is the single list of operations, and each caller's tests check their exports against it: adding an operation to it fails Go, JavaScript, npm, Python and CLI tests until each one has the call, or the file says why it can't.
 
-The npm and Python fetchers are the CLI's: one SSRF-safe client (`crates/opencrs-fetch`) that connects only to public addresses, checks them after DNS and on every redirect, uses HTTPS only, ignores proxy settings and caps sizes. `fetchPublisher` and `discover` return Promises and run off the event loop; Python releases the GIL while it waits.
+The npm and Python fetchers are the CLI's: one SSRF-safe client (`crates/opencrs-fetch`) that connects only to public addresses, checks them after DNS and on every redirect, uses HTTPS only, ignores proxy settings and caps sizes. `fetchPublisher` and `discover` return Promises that run on a thread of their own (and take an `AbortSignal`); Python releases the GIL while it waits. Both hold a whole call to a total time limit (five minutes by default) and count every byte read, compressed and decompressed, against the size limits.
 
 Every Go call also has a `…Context` form that stops when its context is cancelled. `Publisher` returns the URLs it still needs as `Wanted`; they come from the publisher, so fetch them with `SafeClient`, or let `FetchPublisher` run the whole loop.
 

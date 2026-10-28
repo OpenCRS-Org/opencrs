@@ -398,26 +398,38 @@ export function publisher(
 ): PublisherResult;
 
 export interface FetchPublisherOptions {
-  /** The most one page may be, in bytes (default 50 MiB). */
+  /** The most one page may be, in bytes (default and most 50 MiB). */
   maxDocumentBytes?: number;
-  /** The most all pages may be together (default 180 MiB). */
+  /**
+   * The most all pages may be together, counting what is read from the
+   * network and again once decompressed (default 180 MiB, most 512 MiB).
+   */
   maxTotalBytes?: number;
-  /** How many times the core is asked (default 5). */
+  /** How many times the core is asked (default 5, most 10). */
   maxRounds?: number;
-  /** How many URLs are fetched in all (default 4000). */
+  /** How many URLs are fetched in all (default 4000, most 10000). */
   maxPages?: number;
-  /** For one request, redirects included (default 120000). */
+  /** For one request, redirects included (default 120000, most 3600000). */
   timeoutMs?: number;
+  /**
+   * For the whole check (default 300000, most 3600000). A request never runs
+   * past it, and a URL not yet fetched when it passes is reported as not
+   * fetched.
+   */
+  totalTimeoutMs?: number;
   /** An RFC 3339 time to check at (default: now). */
   now?: string;
+  /** Stops the check, between pages and within a read; the promise rejects with the signal's reason. */
+  signal?: AbortSignal;
 }
 
 /**
  * Runs the publisher check end to end: fetches the publisher's index and the
  * documents it lists, and resolves with the same result as `publisher`. HTTPS
  * only; an address that isn't public is refused after DNS and on every
- * redirect; proxy settings are ignored. Runs off the event loop. Rejects if
- * the check still wanted URLs after its last round.
+ * redirect; proxy settings are ignored. It runs on a thread of its own, not
+ * the libuv pool, and is held to `totalTimeoutMs`. Rejects if the check still
+ * wanted URLs after its last round.
  */
 export function fetchPublisher(
   domain: string,
@@ -427,15 +439,27 @@ export function fetchPublisher(
 export interface DiscoverOptions {
   /** Bearer tokens for partner documents, by publisher domain. */
   tokens?: Record<string, string>;
-  /** Local testing: allow http:// and connections to localhost. */
-  allowLocalHttp?: boolean;
+  /**
+   * For local testing only: lets a publisher that is itself on `localhost`,
+   * `127.0.0.1` or `[::1]` use `http://` and reach localhost. A public
+   * publisher gets nothing from it. Do not set it in code that checks
+   * publishers other people name.
+   */
+  unsafeAllowLocalHttp?: boolean;
+  /** For one request, redirects included (default 30000, most 3600000). */
+  timeoutMs?: number;
+  /** For the whole run (default 300000, most 3600000). */
+  totalTimeoutMs?: number;
   /** An RFC 3339 time to judge expiry at (default: now). */
   now?: string;
+  /** Stops the run; the promise rejects with the signal's reason. */
+  signal?: AbortSignal;
 }
 
 /**
  * Finds a publisher's specs and says which to trust, as `opencrs fetch`
  * does; resolves with its `result`. Rejects if the index itself can't be
- * fetched or trusted. Fetches as carefully as `fetchPublisher`.
+ * fetched or trusted. Fetches as carefully as `fetchPublisher`, on a thread
+ * of its own.
  */
 export function discover(domain: string, options?: DiscoverOptions): Promise<DiscoveryResult>;

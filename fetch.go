@@ -117,8 +117,8 @@ func FetchPublisher(ctx context.Context, domain string, now time.Time, opts *Fet
 				pages[w.URL] = Page{Error: fmt.Sprintf("not fetched: a check reads at most %d bytes in all", o.MaxTotalBytes)}
 			default:
 				limit := min(o.MaxDocumentBytes, o.MaxTotalBytes-total)
-				p := FetchPage(ctx, o.Client, w, limit)
-				total += int64(len(p.Body))
+				p, read := fetchPage(ctx, o.Client, w, limit)
+				total += read
 				pages[w.URL] = p
 			}
 			if err := ctx.Err(); err != nil {
@@ -140,16 +140,37 @@ type sameHostKey struct{}
 // redirect to another host an error. The body is read as served, with gzip
 // undone, and the headers the check looks at are kept.
 func FetchPage(ctx context.Context, c *http.Client, w WantedURL, maxBytes int64) Page {
+	p, _ := fetchPage(ctx, c, w, maxBytes)
+	return p
+}
+
+// countingReader adds what it reads to *n.
+type countingReader struct {
+	r io.Reader
+	n *int64
+}
+
+func (c countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	*c.n += int64(n)
+	return n, err
+}
+
+// fetchPage is FetchPage that also says how many bytes it read, from the
+// network and, for a gzipped body, again decompressed, however it ended: a
+// page that was too big, or never decoded, still cost what it cost, and
+// FetchPublisher counts that against its total.
+func fetchPage(ctx context.Context, c *http.Client, w WantedURL, maxBytes int64) (Page, int64) {
 	if maxBytes <= 0 {
 		maxBytes = MaxDocumentBytes
 	}
-	fail := func(err error) Page { return Page{Error: err.Error()} }
+	fail := func(err error) (Page, int64) { return Page{Error: err.Error()}, 0 }
 	u, err := url.Parse(w.URL)
 	if err != nil {
 		return fail(err)
 	}
 	if u.Scheme != "https" || u.User != nil || u.Host == "" {
-		return Page{Error: fmt.Sprintf("%s: only https:// URLs without a user name can be fetched", u.Redacted())}
+		return Page{Error: fmt.Sprintf("%s: only https:// URLs without a user name can be fetched", u.Redacted())}, 0
 	}
 	if w.SameHost {
 		ctx = context.WithValue(ctx, sameHostKey{}, true)
@@ -176,26 +197,39 @@ func FetchPage(ctx context.Context, c *http.Client, w WantedURL, maxBytes int64)
 		AllowOrigin:     resp.Header.Get("Access-Control-Allow-Origin"),
 	}
 	if resp.StatusCode != http.StatusOK {
-		return p
+		return p, 0
 	}
-	var body io.Reader = resp.Body
-	if strings.EqualFold(p.ContentEncoding, "gzip") {
-		zr, err := gzip.NewReader(resp.Body)
+	var read, wire int64
+	var body io.Reader = countingReader{resp.Body, &read}
+	gz := strings.EqualFold(p.ContentEncoding, "gzip")
+	// What goes over the wire is capped too: compressed data can stream
+	// without ever growing the decoded body (empty deflate blocks, say), and
+	// incompressible data comes out a little larger than it went in.
+	wireCap := maxBytes + maxBytes/16 + 4096
+	if gz {
+		body = countingReader{io.LimitReader(countingReader{resp.Body, &wire}, wireCap), &read}
+		zr, err := gzip.NewReader(body)
 		if err != nil {
-			return fail(err)
+			return Page{Error: err.Error()}, read
 		}
 		defer zr.Close()
-		body = zr
+		body = countingReader{zr, &read}
+	}
+	tooBig := func() (Page, int64) {
+		return Page{Error: fmt.Sprintf("%s: larger than the %d-byte limit", u.Redacted(), maxBytes)}, read
 	}
 	b, err := io.ReadAll(io.LimitReader(body, maxBytes+1))
 	if err != nil {
-		return fail(err)
+		if gz && wire >= wireCap {
+			return tooBig()
+		}
+		return Page{Error: err.Error()}, read
 	}
 	if int64(len(b)) > maxBytes {
-		return Page{Error: fmt.Sprintf("%s: larger than the %d-byte limit", u.Redacted(), maxBytes)}
+		return tooBig()
 	}
 	p.Body = string(b)
-	return p
+	return p, read
 }
 
 // SafeClient returns an HTTP client for fetching URLs a publisher chose. It
@@ -283,6 +317,7 @@ var refusedV4 = []struct {
 	{netip.MustParsePrefix("10.0.0.0/8"), "a private address"},
 	{netip.MustParsePrefix("100.64.0.0/10"), "a shared (CGNAT) address"},
 	{netip.MustParsePrefix("127.0.0.0/8"), "a loopback address"},
+	{netip.MustParsePrefix("168.63.129.16/32"), "a cloud metadata address"}, // Azure's WireServer: public, but only answers the VM beside it
 	{netip.MustParsePrefix("169.254.0.0/16"), "a link-local address"},
 	{netip.MustParsePrefix("172.16.0.0/12"), "a private address"},
 	{netip.MustParsePrefix("192.0.0.0/24"), "an IETF protocol address"},

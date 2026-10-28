@@ -15,8 +15,11 @@
 use opencrs::discover::{
     FetchError, Fetcher, MAX_DOCUMENT_BYTES, Request, Response, scheme_allowed,
 };
+use std::cell::Cell;
 use std::io::Read;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use ureq::config::Config;
 use ureq::http::Uri;
@@ -27,7 +30,12 @@ use url::Url;
 
 /// Why an IPv4 address may not be fetched from, if it may not.
 fn refused_v4(ip: Ipv4Addr) -> Option<&'static str> {
-    let [a, b, c, _] = ip.octets();
+    let [a, b, c, d] = ip.octets();
+    // Azure's WireServer and instance metadata endpoint: a public address
+    // that only answers to the VM next to it, and hands out its secrets.
+    if (a, b, c, d) == (168, 63, 129, 16) {
+        return Some("a cloud metadata address");
+    }
     Some(match (a, b, c) {
         (0, ..) => "an unspecified address",
         (127, ..) => "a loopback address",
@@ -125,7 +133,12 @@ impl Resolver for GuardedResolver {
         let addrs = DefaultResolver::default().resolve(uri, config, timeout)?;
         let host = uri.host().unwrap_or("");
         for a in addrs.iter() {
-            check_address(host, a.ip(), self.allow_local).map_err(|why| {
+            check_address(
+                host,
+                a.ip(),
+                self.allow_local && CHAIN_LOCAL.with(Cell::get),
+            )
+            .map_err(|why| {
                 ureq::Error::Io(std::io::Error::new(
                     std::io::ErrorKind::PermissionDenied,
                     why,
@@ -148,6 +161,113 @@ pub struct Reply {
     pub content_type: String,
     pub content_encoding: String,
     pub allow_origin: String,
+}
+
+/// What can stop requests early, and what they have cost. Share one
+/// `Control` (it is cheap to clone) between the requests of one check.
+#[derive(Debug, Clone, Default)]
+pub struct Control {
+    deadline: Option<Instant>,
+    cancel: Option<Arc<AtomicBool>>,
+    read: Arc<AtomicUsize>,
+}
+
+impl Control {
+    /// A deadline for everything done under this control, and a flag
+    /// another thread sets to stop it. Either may be absent.
+    pub fn new(deadline: Option<Instant>, cancel: Option<Arc<AtomicBool>>) -> Control {
+        Control {
+            deadline,
+            cancel,
+            read: Arc::default(),
+        }
+    }
+
+    /// Why requests must stop now, if they must.
+    pub fn stopped(&self) -> Option<&'static str> {
+        if self
+            .cancel
+            .as_ref()
+            .is_some_and(|c| c.load(Ordering::Relaxed))
+        {
+            Some("cancelled")
+        } else if self.deadline.is_some_and(|d| Instant::now() >= d) {
+            Some("the time limit for the whole check was reached")
+        } else {
+            None
+        }
+    }
+
+    /// Whether the stop is a cancellation (the caller's), not the deadline.
+    pub fn cancelled(&self) -> bool {
+        self.cancel
+            .as_ref()
+            .is_some_and(|c| c.load(Ordering::Relaxed))
+    }
+
+    /// Bytes read so far on behalf of this control, from the network and,
+    /// for a compressed body, again once decompressed.
+    pub fn bytes_read(&self) -> usize {
+        self.read.load(Ordering::Relaxed)
+    }
+
+    fn add(&self, n: usize) {
+        self.read.fetch_add(n, Ordering::Relaxed);
+    }
+}
+
+/// Counts what passes through, and stops when the control says to.
+struct Metered<R> {
+    inner: R,
+    control: Control,
+    /// Bytes through this reader alone.
+    here: Arc<AtomicUsize>,
+}
+
+impl<R: Read> Read for Metered<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if let Some(why) = self.control.stopped() {
+            return Err(std::io::Error::other(why));
+        }
+        let n = self.inner.read(buf)?;
+        self.control.add(n);
+        self.here.fetch_add(n, Ordering::Relaxed);
+        Ok(n)
+    }
+}
+
+/// Why a request failed: the control's reason if it had run out of time or
+/// been cancelled, else the error's own.
+fn why(control: &Control, error: String) -> String {
+    control.stopped().map(str::to_string).unwrap_or(error)
+}
+
+thread_local! {
+    /// Whether the request in progress on this thread may reach localhost.
+    static CHAIN_LOCAL: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Sets [`CHAIN_LOCAL`] for the length of one request, redirects included.
+struct ChainGuard;
+
+impl ChainGuard {
+    fn set(local: bool) -> ChainGuard {
+        CHAIN_LOCAL.with(|c| c.set(local));
+        ChainGuard
+    }
+}
+
+impl Drop for ChainGuard {
+    fn drop(&mut self) {
+        CHAIN_LOCAL.with(|c| c.set(false));
+    }
+}
+
+/// Whether a request that starts at `start` may reach localhost in local
+/// testing mode: only if it starts there. A public URL that redirects to
+/// localhost is not testing.
+pub(crate) fn chain_may_be_local(start: &Url, allow_local: bool) -> bool {
+    allow_local && opencrs::discover::is_local_host(&host_with_port(start))
 }
 
 /// The guarded HTTP client: HTTPS only (HTTP to localhost when allowed),
@@ -197,23 +317,43 @@ impl Http {
     /// Fetches `req.url`, following redirects by hand. A body of more than
     /// `limit` bytes (once decompressed) is an error.
     pub fn get(&self, req: &Request, limit: usize) -> Result<Reply, FetchError> {
+        self.get_controlled(req, limit, &Control::default())
+    }
+
+    /// [`Http::get`] that also stops at `control`'s deadline or
+    /// cancellation, and counts the bytes it reads into it, on every path,
+    /// errors included.
+    pub fn get_controlled(
+        &self,
+        req: &Request,
+        limit: usize,
+        control: &Control,
+    ) -> Result<Reply, FetchError> {
         let start = Url::parse(&req.url).map_err(|e| {
             FetchError::Other(format!("parse {}: {e}", opencrs::gofmt::quote(&req.url)))
         })?;
-        if !scheme_allowed(&start, self.allow_local) {
+        let local = chain_may_be_local(&start, self.allow_local);
+        if !scheme_allowed(&start, local) {
             return Err(FetchError::Other(format!(
                 "{}: only https:// URLs can be fetched",
                 req.url
             )));
         }
+        let _chain = ChainGuard::set(local);
         // One deadline for the whole request, redirects included, like
-        // Go's http.Client.Timeout.
-        let deadline = Instant::now() + self.timeout;
+        // Go's http.Client.Timeout, and never past the control's.
+        let mut deadline = Instant::now() + self.timeout;
+        if let Some(d) = control.deadline {
+            deadline = deadline.min(d);
+        }
         let wrap = |url: &Url, why: String| FetchError::Other(format!("Get \"{url}\": {why}"));
 
         let mut via = vec![start.clone()];
         let mut current = start;
         loop {
+            if let Some(why) = control.stopped() {
+                return Err(wrap(&current, why.into()));
+            }
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
                 return Err(wrap(
@@ -236,7 +376,9 @@ impl Http {
             if let Some(t) = &req.token {
                 r = r.header("Authorization", format!("Bearer {t}"));
             }
-            let mut resp = r.call().map_err(|e| wrap(&current, e.to_string()))?;
+            let mut resp = r
+                .call()
+                .map_err(|e| wrap(&current, why(control, e.to_string())))?;
             let code = resp.status().as_u16();
             if matches!(code, 301 | 302 | 303 | 307 | 308)
                 && let Some(loc) = resp.headers().get("location").and_then(|v| v.to_str().ok())
@@ -245,7 +387,7 @@ impl Http {
                     .join(loc)
                     .map_err(|e| wrap(&current, format!("invalid redirect location: {e}")))?;
                 // Go names the Location as given, not the resolved URL.
-                check_redirect(&next, &via, req, self.allow_local)
+                check_redirect(&next, &via, req, local)
                     .map_err(|why| FetchError::Other(format!("Get \"{loc}\": {why}")))?;
                 via.push(next.clone());
                 current = next;
@@ -271,22 +413,45 @@ impl Http {
             if code != 200 {
                 return Ok(reply);
             }
-            let raw = resp.body_mut().with_config().limit(u64::MAX).reader();
-            let body: Box<dyn Read> = if reply.content_encoding.eq_ignore_ascii_case("gzip") {
-                Box::new(flate2::read::GzDecoder::new(raw))
+            let too_big =
+                || FetchError::Other(format!("{}: larger than the {limit}-byte limit", req.url));
+            let net = Arc::new(AtomicUsize::new(0));
+            let raw = Metered {
+                inner: resp.body_mut().with_config().limit(u64::MAX).reader(),
+                control: control.clone(),
+                here: net.clone(),
+            };
+            let gzip = reply.content_encoding.eq_ignore_ascii_case("gzip");
+            // What goes over the wire is capped too: compressed data can
+            // stream for as long as it likes without ever growing the
+            // decoded body (empty deflate blocks, say), and incompressible
+            // data comes out a little larger than it went in.
+            let raw_cap = limit.saturating_add(limit / 16).saturating_add(4096);
+            let body: Box<dyn Read> = if gzip {
+                let wire = raw.take(raw_cap as u64);
+                // Every member, and an error for anything after them, as
+                // Go's reader does.
+                Box::new(Metered {
+                    inner: flate2::read::MultiGzDecoder::new(wire),
+                    control: control.clone(),
+                    here: Arc::default(),
+                })
             } else {
                 Box::new(raw)
             };
             // The limit is on what a check would hold, so on the
             // decompressed body.
-            body.take(limit as u64 + 1)
-                .read_to_end(&mut reply.body)
-                .map_err(|e| wrap(&current, e.to_string()))?;
+            let read = body
+                .take((limit as u64).saturating_add(1))
+                .read_to_end(&mut reply.body);
+            if let Err(e) = read {
+                if gzip && net.load(Ordering::Relaxed) >= raw_cap {
+                    return Err(too_big());
+                }
+                return Err(wrap(&current, why(control, e.to_string())));
+            }
             if reply.body.len() > limit {
-                return Err(FetchError::Other(format!(
-                    "{}: larger than the {limit}-byte limit",
-                    req.url
-                )));
+                return Err(too_big());
             }
             return Ok(reply);
         }
@@ -301,6 +466,8 @@ pub struct UreqFetcher {
     pub max_bytes: usize,
     /// Zero means 30 seconds.
     pub timeout: Duration,
+    /// A deadline for all the fetches of a run, and a way to cancel them.
+    pub control: Control,
 }
 
 impl UreqFetcher {
@@ -309,6 +476,7 @@ impl UreqFetcher {
             allow_local_http,
             max_bytes: 0,
             timeout: Duration::ZERO,
+            control: Control::default(),
         }
     }
 }
@@ -333,6 +501,12 @@ fn check_redirect(next: &Url, via: &[Url], req: &Request, allow_local: bool) -> 
             "refusing redirect from {prev} to {next}: not HTTPS"
         ));
     }
+    if !next.username().is_empty() || next.password().is_some() {
+        return Err(format!(
+            "refusing redirect from {prev} to {}: it has a user name or password",
+            next.host_str().unwrap_or("")
+        ));
+    }
     let first = host_with_port(&via[0]);
     let to = host_with_port(next);
     if !first.eq_ignore_ascii_case(&to) && (req.same_host || req.token.is_some()) {
@@ -350,7 +524,11 @@ impl Fetcher for UreqFetcher {
         } else {
             self.max_bytes
         };
-        let r = Http::new(self.allow_local_http, self.timeout).get(req, limit)?;
+        let r = Http::new(self.allow_local_http, self.timeout).get_controlled(
+            req,
+            limit,
+            &self.control,
+        )?;
         if r.status != 200 {
             return Err(FetchError::Status {
                 url: req.url.clone(),
@@ -421,6 +599,7 @@ mod tests {
             "100.64.0.1",
             "100.127.255.255",
             "169.254.169.254",
+            "168.63.129.16",
             "192.0.0.1",
             "192.0.2.1",
             "198.51.100.1",

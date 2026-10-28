@@ -153,6 +153,7 @@ mod tests {
                 check: check_publisher(domain, &pages, "not fetched", now),
                 rounds_exhausted: false,
                 rounds: 5,
+                cancelled: false,
             }
         };
         let (mut out, mut err) = (Vec::new(), Vec::new());

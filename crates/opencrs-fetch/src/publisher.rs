@@ -2,16 +2,23 @@
 //! them, ask again. Port of `FetchPublisher` and `FetchPage` in `fetch.go`,
 //! with the same limits and the same recorded errors.
 
-use crate::http::Http;
+use crate::http::{Control, Http};
 use chrono::{DateTime, FixedOffset};
 use opencrs::discover::{MAX_DOCUMENT_BYTES, Request};
 use opencrs::publisher::{Page, PublisherCheck, WantedUrl, check_publisher};
 use std::collections::{BTreeMap, HashMap};
-use std::time::Duration;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::time::{Duration, Instant};
 use url::Url;
 
 /// How much [`fetch_publisher`] reads in all, as Go's `DefaultMaxTotalBytes`.
+/// Bytes are counted as they are read: from the network, and again once
+/// decompressed.
 pub const DEFAULT_MAX_TOTAL_BYTES: usize = 180 << 20;
+
+/// The most any caller may ask [`fetch_publisher`] to read in all.
+pub const MAX_TOTAL_BYTES: usize = 512 << 20;
 
 /// How many times [`fetch_publisher`] asks the core. The core needs at most
 /// three: the index, then its documents and delegate indexes, then the
@@ -21,22 +28,41 @@ pub const DEFAULT_MAX_ROUNDS: usize = 5;
 /// How many URLs [`fetch_publisher`] fetches in all.
 pub const DEFAULT_MAX_PAGES: usize = 4000;
 
-/// Controls [`fetch_publisher`]. Zero means the default, for every limit.
+/// How long a whole check may take unless told otherwise. A check is a few
+/// small requests: an index, then its documents, a round or two more for a
+/// delegate. Five minutes is generous for that, even over a slow link or for
+/// documents of tens of megabytes, and it bounds what a publisher that
+/// answers as slowly as it can can cost.
+pub const DEFAULT_TOTAL_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// The longest any timeout may be.
+pub const MAX_TIMEOUT: Duration = Duration::from_secs(3600);
+
+/// Controls [`fetch_publisher`]. Zero means the default, for every limit;
+/// a limit above the most allowed is the most allowed.
 #[derive(Debug, Clone, Default)]
 pub struct FetchOptions {
-    /// The most one page may be; default 50 MiB.
+    /// The most one page may be; default and most 50 MiB.
     pub max_document_bytes: usize,
-    /// The most all pages may be together; default 180 MiB. A page past it
-    /// is recorded as not fetched.
+    /// The most all pages may be together, counting bytes read from the
+    /// network and again decompressed; default 180 MiB, most 512 MiB. A page
+    /// past it is recorded as not fetched.
     pub max_total_bytes: usize,
-    /// How many times the core is asked; default 5.
+    /// How many times the core is asked; default 5, most 10.
     pub max_rounds: usize,
-    /// How many URLs are fetched in all; default 4000. A URL past it is
-    /// recorded as not fetched.
+    /// How many URLs are fetched in all; default 4000, most 10,000. A URL
+    /// past it is recorded as not fetched.
     pub max_pages: usize,
     /// For one request, redirects included; default 2 minutes, as Go's
-    /// `SafeClient`.
+    /// `SafeClient`; most an hour.
     pub timeout: Duration,
+    /// For the whole check; default 5 minutes ([`DEFAULT_TOTAL_TIMEOUT`]);
+    /// most an hour. A request never runs past it, and a URL not yet
+    /// fetched when it passes is recorded as not fetched.
+    pub total_timeout: Duration,
+    /// Set by another thread to stop the check between pages and within a
+    /// read. [`Fetched::cancelled`] says it did.
+    pub cancel: Option<Arc<AtomicBool>>,
 }
 
 /// The result of [`fetch_publisher`].
@@ -49,6 +75,9 @@ pub struct Fetched {
     pub rounds_exhausted: bool,
     /// How many rounds the limit allowed.
     pub rounds: usize,
+    /// Set when `FetchOptions::cancel` stopped the check. `check` is then
+    /// from the last round that finished.
+    pub cancelled: bool,
 }
 
 /// A page as held between rounds: [`Page`] owns nothing, so the bodies live
@@ -95,7 +124,14 @@ impl Held {
 /// is an error. Only HTTPS is fetched, with no user name or password;
 /// `w.same_host` makes a redirect to another host an error. The body is read
 /// as served with gzip undone, and the headers the check looks at are kept.
-fn fetch_held(http: &Http, allow_local: bool, w: &WantedUrl, max_bytes: usize) -> Held {
+/// What it reads is counted into `control` however it ends.
+fn fetch_held_with(
+    http: &Http,
+    allow_local: bool,
+    w: &WantedUrl,
+    max_bytes: usize,
+    control: &Control,
+) -> Held {
     let max_bytes = if max_bytes == 0 {
         MAX_DOCUMENT_BYTES
     } else {
@@ -120,7 +156,7 @@ fn fetch_held(http: &Http, allow_local: bool, w: &WantedUrl, max_bytes: usize) -
         same_host: w.same_host,
         index: w.kind == "index",
     };
-    match http.get(&req, max_bytes) {
+    match http.get_controlled(&req, max_bytes, control) {
         Ok(r) => Held {
             status: r.status,
             body: r.body,
@@ -134,6 +170,11 @@ fn fetch_held(http: &Http, allow_local: bool, w: &WantedUrl, max_bytes: usize) -
         },
         Err(e) => Held::failed(e.to_string()),
     }
+}
+
+#[cfg(test)]
+fn fetch_held(http: &Http, allow_local: bool, w: &WantedUrl, max_bytes: usize) -> Held {
+    fetch_held_with(http, allow_local, w, max_bytes, &Control::default())
 }
 
 /// A URL for messages, without a password.
@@ -154,16 +195,17 @@ fn redacted(u: &Url) -> String {
 /// connection to a non-public address (checked after DNS and on every
 /// redirect), no proxy. A fetch that fails is recorded as a failed page,
 /// which the result reports against its document. Pages are fetched one at a
-/// time, in the order the core asks.
+/// time, in the order the core asks. The whole check is held to
+/// `opts.total_timeout`, and `opts.cancel` stops it early.
 pub fn fetch_publisher(domain: &str, now: DateTime<FixedOffset>, opts: &FetchOptions) -> Fetched {
     let timeout = if opts.timeout.is_zero() {
         Duration::from_secs(120)
     } else {
-        opts.timeout
+        opts.timeout.min(MAX_TIMEOUT)
     };
     let http = Http::new(false, timeout);
-    run(domain, now, opts, &mut |w, limit| {
-        fetch_held(&http, false, w, limit)
+    run(domain, now, opts, &mut |w, limit, control| {
+        fetch_held_with(&http, false, w, limit, control)
     })
 }
 
@@ -173,15 +215,31 @@ fn run(
     domain: &str,
     now: DateTime<FixedOffset>,
     opts: &FetchOptions,
-    fetch: &mut dyn FnMut(&WantedUrl, usize) -> Held,
+    fetch: &mut dyn FnMut(&WantedUrl, usize, &Control) -> Held,
 ) -> Fetched {
-    let or = |v: usize, d: usize| if v == 0 { d } else { v };
-    let max_doc = or(opts.max_document_bytes, MAX_DOCUMENT_BYTES);
-    let max_total = or(opts.max_total_bytes, DEFAULT_MAX_TOTAL_BYTES);
-    let max_rounds = or(opts.max_rounds, DEFAULT_MAX_ROUNDS);
-    let max_pages = or(opts.max_pages, DEFAULT_MAX_PAGES);
+    let or = |v: usize, d: usize, most: usize| if v == 0 { d } else { v.min(most) };
+    let max_doc = or(
+        opts.max_document_bytes,
+        MAX_DOCUMENT_BYTES,
+        MAX_DOCUMENT_BYTES,
+    );
+    let max_total = or(
+        opts.max_total_bytes,
+        DEFAULT_MAX_TOTAL_BYTES,
+        MAX_TOTAL_BYTES,
+    );
+    let max_rounds = or(opts.max_rounds, DEFAULT_MAX_ROUNDS, 10);
+    let max_pages = or(opts.max_pages, DEFAULT_MAX_PAGES, 10_000);
+    let total_timeout = if opts.total_timeout.is_zero() {
+        DEFAULT_TOTAL_TIMEOUT
+    } else {
+        opts.total_timeout.min(MAX_TIMEOUT)
+    };
+    let control = Control::new(
+        Instant::now().checked_add(total_timeout),
+        opts.cancel.clone(),
+    );
     let mut held: HashMap<String, Held> = HashMap::new();
-    let mut total = 0usize;
     let mut last = None;
     for _ in 0..max_rounds {
         let pages: BTreeMap<String, Page<'_>> =
@@ -193,12 +251,23 @@ fn run(
                 check: res,
                 rounds_exhausted: false,
                 rounds: max_rounds,
+                cancelled: control.cancelled(),
             };
         }
         for w in &res.wanted_detail {
             if held.contains_key(&w.url) {
                 continue; // never fetched twice, whatever the core says
             }
+            if control.cancelled() {
+                return Fetched {
+                    check: res,
+                    rounds_exhausted: false,
+                    rounds: max_rounds,
+                    cancelled: true,
+                };
+            }
+            // What was read counts, whether or not the page was kept.
+            let total = control.bytes_read();
             let h = if held.len() >= max_pages {
                 Held::failed(format!(
                     "not fetched: a check fetches at most {max_pages} URLs"
@@ -207,11 +276,10 @@ fn run(
                 Held::failed(format!(
                     "not fetched: a check reads at most {max_total} bytes in all"
                 ))
+            } else if let Some(why) = control.stopped() {
+                Held::failed(format!("not fetched: {why}"))
             } else {
-                let limit = max_doc.min(max_total - total);
-                let h = fetch(w, limit);
-                total += h.body.len();
-                h
+                fetch(w, max_doc.min(max_total - total), &control)
             };
             held.insert(w.url.clone(), h);
         }
@@ -221,6 +289,7 @@ fn run(
         check: last.expect("at least one round"),
         rounds_exhausted: true,
         rounds: max_rounds,
+        cancelled: control.cancelled(),
     }
 }
 
@@ -228,7 +297,7 @@ fn run(
 mod tests {
     use super::*;
     use std::cell::Cell;
-    use std::collections::HashMap;
+    use std::sync::atomic::Ordering;
 
     use crate::server::{Resp, Server};
     use crate::tls_server::TlsServer;
@@ -279,12 +348,12 @@ mod tests {
     fn local<'a>(
         srv: &'a Server,
         calls: &'a Cell<usize>,
-    ) -> impl FnMut(&WantedUrl, usize) -> Held + 'a {
+    ) -> impl FnMut(&WantedUrl, usize, &Control) -> Held + 'a {
         let http = Http::new(true, Duration::from_secs(10));
-        move |w, limit| {
+        move |w, limit, control| {
             calls.set(calls.get() + 1);
             let url = w.url.replace("https://harbourline.example", &srv.url());
-            fetch_held(&http, true, &WantedUrl { url, ..w.clone() }, limit)
+            fetch_held_with(&http, true, &WantedUrl { url, ..w.clone() }, limit, control)
         }
     }
 
@@ -509,14 +578,17 @@ mod tests {
                 .header("Cache-Control", "max-age=60"),
             _ => Resp::status(404),
         });
-        let tokens = HashMap::new();
-        let r = crate::discover(&srv.addr, &tokens, true, now()).unwrap();
+        let local = crate::DiscoverOptions {
+            allow_local_http: true,
+            ..Default::default()
+        };
+        let r = crate::discover(&srv.addr, now(), &local).unwrap().result;
         assert_eq!(r.index.publisher.name, "Harbourline");
         assert_eq!(r.documents.len(), 1);
         assert_eq!(r.documents[0].status.to_string(), "trusted");
         assert_eq!(r.documents[0].cache_control, "max-age=60");
         assert!(r.documents[0].raw.is_empty(), "raw is not kept");
-        let e = crate::discover(&srv.addr, &tokens, false, now()).unwrap_err();
+        let e = crate::discover(&srv.addr, now(), &Default::default()).unwrap_err();
         assert!(e.to_string().contains("isn't a publisher domain"), "{e}");
     }
 
@@ -612,10 +684,10 @@ mod tests {
             "harbourline.example",
             now(),
             &FetchOptions::default(),
-            &mut |w, limit| {
+            &mut |w, limit, control| {
                 calls.set(calls.get() + 1);
                 let url = w.url.replace("https://harbourline.example", &srv.url());
-                fetch_held(&http, true, &WantedUrl { url, ..w.clone() }, limit)
+                fetch_held_with(&http, true, &WantedUrl { url, ..w.clone() }, limit, control)
             },
         );
         assert!(!f.rounds_exhausted);
@@ -628,5 +700,303 @@ mod tests {
             *srv.seen.lock().unwrap(),
             ["/.well-known/opencrs.json", "/retail.screens.json"]
         );
+    }
+
+    /// A server that answers with a body of a hundred megabytes and sends a
+    /// byte every `ms` milliseconds: as slow as a publisher can be without
+    /// ever stopping.
+    fn drip(ms: u64) -> u16 {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut s) = stream else { continue };
+                std::thread::spawn(move || {
+                    let mut buf = [0u8; 1024];
+                    let _ = s.read(&mut buf);
+                    let head =
+                        "HTTP/1.1 200 X\r\nContent-Length: 100000000\r\nConnection: close\r\n\r\n";
+                    if s.write_all(head.as_bytes()).is_err() {
+                        return;
+                    }
+                    while s.write_all(b" ").and_then(|_| s.flush()).is_ok() {
+                        std::thread::sleep(Duration::from_millis(ms));
+                    }
+                });
+            }
+        });
+        port
+    }
+
+    fn local_req(url: String) -> Request {
+        Request {
+            url,
+            ..Request::default()
+        }
+    }
+
+    #[test]
+    fn the_total_deadline_stops_a_body_that_never_ends() {
+        let port = drip(20);
+        let http = Http::new(true, Duration::from_secs(60));
+        let control = Control::new(Instant::now().checked_add(Duration::from_millis(400)), None);
+        let t = Instant::now();
+        let e = http
+            .get_controlled(
+                &local_req(format!("http://127.0.0.1:{port}/")),
+                usize::MAX,
+                &control,
+            )
+            .unwrap_err();
+        assert!(
+            t.elapsed() < Duration::from_secs(3),
+            "took {:?}",
+            t.elapsed()
+        );
+        assert!(
+            t.elapsed() >= Duration::from_millis(300),
+            "stopped early: {e}"
+        );
+        assert!(!control.cancelled());
+        // What was read before it stopped is counted.
+        assert!(control.bytes_read() > 0, "{e}");
+    }
+
+    #[test]
+    fn cancelling_stops_a_body_that_never_ends() {
+        let port = drip(20);
+        let http = Http::new(true, Duration::from_secs(60));
+        let flag = Arc::new(AtomicBool::new(false));
+        let control = Control::new(None, Some(flag.clone()));
+        let f2 = flag.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            f2.store(true, Ordering::Relaxed);
+        });
+        let t = Instant::now();
+        let e = http
+            .get_controlled(
+                &local_req(format!("http://127.0.0.1:{port}/")),
+                usize::MAX,
+                &control,
+            )
+            .unwrap_err();
+        assert!(
+            t.elapsed() < Duration::from_secs(3),
+            "took {:?}",
+            t.elapsed()
+        );
+        assert!(e.to_string().contains("cancelled"), "{e}");
+        assert!(control.cancelled());
+    }
+
+    #[test]
+    fn the_checks_total_time_limit_ends_the_whole_loop() {
+        let port = drip(20);
+        let http = Http::new(true, Duration::from_secs(60));
+        let opts = FetchOptions {
+            total_timeout: Duration::from_millis(500),
+            ..FetchOptions::default()
+        };
+        let t = Instant::now();
+        let f = run(
+            "harbourline.example",
+            now(),
+            &opts,
+            &mut |w, limit, control| {
+                let url = w.url.replace(
+                    "https://harbourline.example",
+                    &format!("http://127.0.0.1:{port}"),
+                );
+                fetch_held_with(&http, true, &WantedUrl { url, ..w.clone() }, limit, control)
+            },
+        );
+        assert!(
+            t.elapsed() < Duration::from_secs(4),
+            "took {:?}",
+            t.elapsed()
+        );
+        assert!(!f.cancelled);
+        assert!(f.check.error.contains("time limit"), "{}", f.check.error);
+    }
+
+    #[test]
+    fn cancelling_ends_the_whole_loop() {
+        let port = drip(20);
+        let http = Http::new(true, Duration::from_secs(60));
+        let flag = Arc::new(AtomicBool::new(false));
+        let opts = FetchOptions {
+            cancel: Some(flag.clone()),
+            ..FetchOptions::default()
+        };
+        let f2 = flag.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            f2.store(true, Ordering::Relaxed);
+        });
+        let t = Instant::now();
+        let f = run(
+            "harbourline.example",
+            now(),
+            &opts,
+            &mut |w, limit, control| {
+                let url = w.url.replace(
+                    "https://harbourline.example",
+                    &format!("http://127.0.0.1:{port}"),
+                );
+                fetch_held_with(&http, true, &WantedUrl { url, ..w.clone() }, limit, control)
+            },
+        );
+        assert!(
+            t.elapsed() < Duration::from_secs(4),
+            "took {:?}",
+            t.elapsed()
+        );
+        assert!(f.cancelled);
+    }
+
+    #[test]
+    fn a_page_past_its_limit_still_counts_towards_the_total() {
+        let srv = Server::start(|r, _| match r.path.as_str() {
+            "/big" => Resp::ok("x".repeat(10_000)),
+            // Gzip, and a long run of empty stored blocks after its header:
+            // nothing ever decodes, and it never ends.
+            "/blocks" => {
+                let mut b = vec![0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 0xff];
+                for _ in 0..20_000 {
+                    b.extend_from_slice(&[0, 0, 0, 0xff, 0xff]);
+                }
+                Resp::ok(b).header("Content-Encoding", "gzip")
+            }
+            "/bomb" => Resp::ok(gzip(&vec![b'x'; 1 << 20])).header("Content-Encoding", "gzip"),
+            _ => Resp::status(404),
+        });
+        let http = Http::new(true, Duration::from_secs(10));
+        let read = |path: &str| {
+            let control = Control::default();
+            let e = http
+                .get_controlled(&local_req(format!("{}{path}", srv.url())), 1000, &control)
+                .unwrap_err();
+            (e.to_string(), control.bytes_read())
+        };
+        let (e, n) = read("/big");
+        assert!(e.contains("larger than the 1000-byte limit"), "{e}");
+        assert!(n >= 1001, "{n}");
+        let (e, n) = read("/blocks");
+        assert!(e.contains("larger than the 1000-byte limit"), "{e}");
+        // Capped near the limit plus a little, not the hundred kilobytes sent.
+        assert!((4000..20_000).contains(&n), "{n}");
+        let (e, n) = read("/bomb");
+        assert!(e.contains("larger than"), "{e}");
+        // Compressed and decompressed both: past the 1001 bytes decoded.
+        assert!(n > 1001, "{n}");
+    }
+
+    #[test]
+    fn a_big_page_is_charged_and_the_next_is_not_fetched() {
+        let srv = publisher();
+        let calls = Cell::new(0);
+        // The index alone is over the budget once read.
+        let opts = FetchOptions {
+            max_total_bytes: 100,
+            ..FetchOptions::default()
+        };
+        let f = run(
+            "harbourline.example",
+            now(),
+            &opts,
+            &mut local(&srv, &calls),
+        );
+        assert!(f.check.error.contains("larger than"), "{}", f.check.error);
+        assert_eq!(calls.get(), 1);
+    }
+
+    #[test]
+    fn huge_limits_are_clamped_not_wrapped() {
+        let srv = publisher();
+        let calls = Cell::new(0);
+        let opts = FetchOptions {
+            max_document_bytes: usize::MAX,
+            max_total_bytes: usize::MAX,
+            max_rounds: usize::MAX,
+            max_pages: usize::MAX,
+            timeout: Duration::MAX,
+            total_timeout: Duration::MAX,
+            cancel: None,
+        };
+        let f = run(
+            "harbourline.example",
+            now(),
+            &opts,
+            &mut local(&srv, &calls),
+        );
+        assert_eq!(f.check.errors, 0, "{:?}", f.check.advice);
+        assert_eq!(f.rounds, 10);
+        // And a limit of the largest number is no overflow in the client.
+        let http = Http::new(true, Duration::from_secs(10));
+        let r = http
+            .get(
+                &local_req(format!("{}/.well-known/opencrs.json", srv.url())),
+                usize::MAX,
+            )
+            .unwrap();
+        assert_eq!(r.status, 200);
+    }
+
+    #[test]
+    fn gzip_members_are_all_read_and_trailing_garbage_is_an_error() {
+        let srv = Server::start(|r, _| {
+            let two = [gzip(b"{\"a\":"), gzip(b"1}")].concat();
+            match r.path.as_str() {
+                "/two" => Resp::ok(two).header("Content-Encoding", "gzip"),
+                "/garbage" => {
+                    Resp::ok([gzip(b"{}"), b"garbage-after-the-member".to_vec()].concat())
+                        .header("Content-Encoding", "gzip")
+                }
+                "/one" => Resp::ok(gzip(b"{}")).header("Content-Encoding", "gzip"),
+                _ => Resp::status(404),
+            }
+        });
+        let http = Http::new(true, Duration::from_secs(10));
+        let get = |p: &str| http.get(&local_req(format!("{}{p}", srv.url())), 1 << 20);
+        assert_eq!(get("/one").unwrap().body, b"{}");
+        assert_eq!(get("/two").unwrap().body, b"{\"a\":1}");
+        let e = get("/garbage").unwrap_err();
+        assert!(e.to_string().starts_with("Get \""), "{e}");
+    }
+
+    #[test]
+    fn a_redirect_with_a_user_name_is_refused() {
+        let srv = Server::start(|r, _| match r.path.as_str() {
+            "/user" => Resp::redirect(&format!("http://user:pw@127.0.0.1:{}/ok", 1)),
+            "/ok" => Resp::ok("{}"),
+            _ => Resp::status(404),
+        });
+        let http = Http::new(true, Duration::from_secs(5));
+        let e = http
+            .get(&local_req(format!("{}/user", srv.url())), 0)
+            .unwrap_err();
+        assert!(e.to_string().contains("user name or password"), "{e}");
+    }
+
+    #[test]
+    fn local_testing_reaches_localhost_only_from_localhost() {
+        let u = |s: &str| Url::parse(s).unwrap();
+        for (url, allow, want) in [
+            ("http://localhost:8080/x", true, true),
+            ("http://127.0.0.1:1/x", true, true),
+            ("https://[::1]:5/x", true, true),
+            ("http://localhost:8080/x", false, false),
+            ("https://harbourline.example/x", true, false),
+            ("https://localhost.example:8080/x", true, false),
+            ("https://evil.example:80/x", true, false),
+        ] {
+            assert_eq!(
+                crate::http::chain_may_be_local(&u(url), allow),
+                want,
+                "{url}"
+            );
+        }
     }
 }

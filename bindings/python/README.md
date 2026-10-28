@@ -54,9 +54,18 @@ waits on the network. The publisher chose every URL, so it fetches as carefully
 as the `opencrs` command line does: HTTPS only, no connection to a loopback,
 private, link-local or other non-public address (checked after DNS and on every
 redirect), no proxy, and caps on the size and number of pages
-(`max_document_bytes`, `max_total_bytes`, `max_rounds`, `max_pages`, `timeout`).
-`discover(domain)` gives only the trust decisions; `allow_local_http=True` lets
-it reach `localhost` over `http://` for testing.
+(`max_document_bytes`, `max_total_bytes`, `max_rounds`, `max_pages`, `timeout`),
+and the whole call is held to `total_timeout` (five minutes by default, at most
+an hour): a request never runs past it, and a URL not fetched by then is
+reported as not fetched. Because the GIL is released, a `KeyboardInterrupt` or
+a signal handler cannot run until the call returns, and nothing can cancel it;
+`total_timeout` is the bound, so set it to how long you are prepared to wait.
+
+`discover(domain)` gives only the trust decisions. For testing only,
+`unsafe_allow_local_http=True` (keyword-only) lets a publisher that is itself on
+`localhost`, `127.0.0.1` or `[::1]` use `http://` and reach localhost; a public
+publisher gets nothing from it. Do not set it in code that checks publishers
+other people name.
 
 ## Develop
 

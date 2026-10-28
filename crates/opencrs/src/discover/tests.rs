@@ -478,6 +478,30 @@ fn local_testing() {
     assert_eq!((d.status, d.screens), (Status::Trusted, 3), "{}", d.reason);
 }
 
+// Local testing is for a publisher on this machine: a public publisher can't
+// use it to make a check reach localhost. (The index schema already keeps
+// http:// documents and localhost delegates out of a public index; this is
+// the rest.)
+#[test]
+fn local_testing_is_off_for_a_public_publisher() {
+    let mut f = Fake::default();
+    let local_doc = "https://localhost:9/retail.screens.json";
+    f.put(
+        idx_url("p.example"),
+        index("p.example", &[doc(local_doc, "")], &[]),
+    );
+    f.put(local_doc, "{}".to_string());
+    let o = Options {
+        allow_local_http: true,
+        ..opts()
+    };
+    let res = discover("p.example", &o, &f).unwrap();
+    assert_eq!(res.documents[0].status, Status::Rejected);
+    // Nothing on localhost was asked for.
+    let asked: Vec<String> = f.tokens.borrow().keys().cloned().collect();
+    assert_eq!(asked, [idx_url("p.example")]);
+}
+
 #[test]
 fn parse_scope_cases() {
     assert_eq!(parse_scope(""), Some(vec![]));

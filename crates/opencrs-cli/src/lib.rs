@@ -14,6 +14,7 @@ mod cmd_resolve;
 mod cmd_rulepacks;
 mod cmd_schema;
 pub mod conformance;
+mod escape;
 mod gotime;
 pub use opencrs_fetch::http;
 mod io;
@@ -83,8 +84,18 @@ pub fn run_styled(
         Cmd::Check(a) => cmd_check::run(a, stdout, stderr),
         Cmd::Schema(a) => cmd_schema::run(a, stdout, stderr),
         Cmd::Resolve(a) => cmd_resolve::run(a, stdout, stderr),
-        Cmd::Fetch(a) => cmd_fetch::run(a, stdout, stderr),
-        Cmd::Publisher(a) => cmd_publisher::run(a, stdout, stderr),
+        // These print what a publisher wrote, so a terminal gets it with the
+        // control characters shown, not obeyed.
+        Cmd::Fetch(a) => cmd_fetch::run(
+            a,
+            &mut escape::Escaped(stdout),
+            &mut escape::Escaped(stderr),
+        ),
+        Cmd::Publisher(a) => cmd_publisher::run(
+            a,
+            &mut escape::Escaped(stdout),
+            &mut escape::Escaped(stderr),
+        ),
         Cmd::Probe(a) => cmd_probe::run(a, stdout, stderr),
         Cmd::Legibility(a) => cmd_calc::legibility(a, stdout, stderr),
         Cmd::Dwell(a) => cmd_calc::dwell(a, stdout, stderr),

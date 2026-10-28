@@ -172,6 +172,7 @@ def fetch_publisher(
     max_rounds: int = 0,
     max_pages: int = 0,
     timeout: float = 0.0,
+    total_timeout: float = 0.0,
     now: str | None = None,
 ) -> dict[str, Any]:
     return json.loads(
@@ -182,6 +183,7 @@ def fetch_publisher(
             max_rounds,
             max_pages,
             timeout,
+            total_timeout,
             now,
         )
     )
@@ -191,7 +193,13 @@ def discover(
     domain: str,
     *,
     tokens: dict[str, str] | None = None,
-    allow_local_http: bool = False,
+    unsafe_allow_local_http: bool = False,
+    timeout: float = 0.0,
+    total_timeout: float = 0.0,
     now: str | None = None,
 ) -> dict[str, Any]:
-    return json.loads(_native.discover(domain, tokens or {}, allow_local_http, now))
+    return json.loads(
+        _native.discover(
+            domain, tokens or {}, unsafe_allow_local_http, timeout, total_timeout, now
+        )
+    )

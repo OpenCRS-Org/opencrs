@@ -6,6 +6,8 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { createRequire } from "node:module";
 import { createServer } from "node:http";
+import { readFile } from "node:fs/promises";
+import { lookup as dnsLookup } from "node:dns";
 import { gzipSync } from "node:zlib";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -455,7 +457,7 @@ test("discover reads a local publisher and judges its documents, off the event l
   try {
     let ticks = 0;
     const timer = setInterval(() => ticks++, 20);
-    const res = await opencrs.discover(addr, { allowLocalHttp: true, now: NOW });
+    const res = await opencrs.discover(addr, { unsafeAllowLocalHttp: true, now: NOW });
     clearInterval(timer);
     assert.ok(ticks >= 8, `the event loop ran only ${ticks} times in 400 ms`);
     assert.equal(res.index.publisher.name, "Harbourline");
@@ -470,8 +472,104 @@ test("discover reads a local publisher and judges its documents, off the event l
     // Without local testing, the local address isn't a publisher at all.
     await assert.rejects(opencrs.discover(addr, { now: NOW }), /isn't a publisher domain/);
     // An index that can't be fetched rejects.
-    await assert.rejects(opencrs.discover("127.0.0.1:1", { allowLocalHttp: true }), /refused|Connection|connect/i);
+    await assert.rejects(opencrs.discover("127.0.0.1:1", { unsafeAllowLocalHttp: true }), /refused|Connection|connect/i);
     assert.ok(seen.includes("/.well-known/opencrs.json"));
+  } finally {
+    server.close();
+  }
+});
+
+/** A publisher whose index is a hundred megabytes sent a byte at a time: as slow as it can be without stopping. */
+function dripServer() {
+  return new Promise((resolve) => {
+    const server = createServer((req, res) => {
+      res.writeHead(200, { "Content-Length": 1e8 });
+      const t = setInterval(() => res.write(" "), 20);
+      res.on("close", () => clearInterval(t));
+    });
+    server.listen(0, "127.0.0.1", () => resolve({ server, addr: `127.0.0.1:${server.address().port}` }));
+  });
+}
+
+const slow = (extra = {}) => ({ unsafeAllowLocalHttp: true, now: NOW, ...extra });
+
+test("the total time limit stops a publisher that never finishes", async () => {
+  const { server, addr } = await dripServer();
+  try {
+    const t = Date.now();
+    await assert.rejects(opencrs.discover(addr, slow({ totalTimeoutMs: 500 })), /time limit for the whole check/);
+    const took = Date.now() - t;
+    assert.ok(took >= 400 && took < 3000, `took ${took} ms`);
+  } finally {
+    server.closeAllConnections();
+    server.close();
+  }
+});
+
+test("an AbortSignal stops a publisher that never finishes", async () => {
+  const { server, addr } = await dripServer();
+  try {
+    const ctl = new AbortController();
+    setTimeout(() => ctl.abort(), 300);
+    const t = Date.now();
+    await assert.rejects(opencrs.discover(addr, slow({ signal: ctl.signal })), (e) => e.name === "AbortError");
+    assert.ok(Date.now() - t < 3000, `took ${Date.now() - t} ms`);
+    // A reason given to abort() is what rejects.
+    const ctl2 = new AbortController();
+    setTimeout(() => ctl2.abort(new Error("enough")), 200);
+    await assert.rejects(opencrs.discover(addr, slow({ signal: ctl2.signal })), /enough/);
+    // Already aborted: nothing is started.
+    const before = server.listenerCount("request");
+    await assert.rejects(opencrs.discover(addr, slow({ signal: AbortSignal.abort() })), (e) => e.name === "AbortError");
+    await assert.rejects(opencrs.fetchPublisher("harbourline.example", { signal: AbortSignal.abort() }), (e) => e.name === "AbortError");
+    assert.equal(server.listenerCount("request"), before);
+  } finally {
+    server.closeAllConnections();
+    server.close();
+  }
+});
+
+test("slow publishers don't hold up the rest of the process", async () => {
+  const { server, addr } = await dripServer();
+  try {
+    // More calls than the libuv pool has threads, all waiting on a server that never finishes.
+    const ctl = new AbortController();
+    const calls = Array.from({ length: 8 }, () =>
+      opencrs.discover(addr, slow({ signal: ctl.signal })).catch(() => {}),
+    );
+    await new Promise((r) => setTimeout(r, 100));
+    const t = Date.now();
+    await readFile(fileURLToPath(import.meta.url)); // uses the libuv pool
+    await new Promise((r, j) => dnsLookup("localhost", (e) => (e ? j(e) : r())));
+    assert.ok(Date.now() - t < 500, `fs and dns waited ${Date.now() - t} ms behind the fetches`);
+    ctl.abort();
+    await Promise.all(calls);
+  } finally {
+    server.closeAllConnections();
+    server.close();
+  }
+});
+
+test("huge or odd numbers in options are clamped, not wrapped or fatal", async () => {
+  const odd = { maxDocumentBytes: Infinity, maxTotalBytes: 1e30, maxRounds: 1e30, maxPages: Infinity, timeoutMs: 1e300, totalTimeoutMs: Infinity };
+  const res = await opencrs.fetchPublisher("not a domain", { ...odd, now: NOW });
+  assert.match(res.error, /isn't a publisher domain/);
+  for (const bad of [NaN, -1, 0, -Infinity]) {
+    const r = await opencrs.fetchPublisher("not a domain", { maxTotalBytes: bad, timeoutMs: bad, totalTimeoutMs: bad, now: NOW });
+    assert.match(r.error, /isn't a publisher domain/);
+  }
+  // And a real fetch with them still works.
+  const doc = Buffer.from(spec());
+  const { server, addr } = await localPublisher((req, res, a) => {
+    if (req.url === "/.well-known/opencrs.json") {
+      res.end(JSON.stringify({ opencrs: "0.1", publisher: { id: "harbourline.example", name: "H" }, documents: [{ url: `http://${a}/d.screens.json`, network: "retail" }] }));
+    } else {
+      res.end(doc);
+    }
+  });
+  try {
+    const d = await opencrs.discover(addr, slow({ timeoutMs: 1e300, totalTimeoutMs: Infinity }));
+    assert.equal(d.documents[0].status, "trusted");
   } finally {
     server.close();
   }

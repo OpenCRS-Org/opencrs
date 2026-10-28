@@ -54,8 +54,17 @@ so it fetches as carefully as the `opencrs` command line does: HTTPS only, no
 connection to a loopback, private, link-local or other non-public address
 (checked after DNS and on every redirect), no proxy, and caps on the size and
 number of pages (`maxDocumentBytes`, `maxTotalBytes`, `maxRounds`, `maxPages`,
-`timeoutMs`). `discover(domain, options?)` gives only the trust decisions;
-`allowLocalHttp: true` lets it reach `localhost` over `http://` for testing.
+`timeoutMs`), and the whole call is held to `totalTimeoutMs` (five minutes by
+default, at most an hour): a request never runs past it, and a URL not fetched
+by then is reported as not fetched. Pass `signal` (an `AbortSignal`) to stop a
+call early; it rejects with the signal's reason. Each call runs on a thread of
+its own, so a few slow publishers cannot starve `fs`, `dns` or `zlib`.
+
+`discover(domain, options?)` gives only the trust decisions. For testing only,
+`unsafeAllowLocalHttp: true` lets a publisher that is itself on `localhost`,
+`127.0.0.1` or `[::1]` use `http://` and reach localhost; a public publisher
+gets nothing from it. Do not set it in code that checks publishers other people
+name.
 
 ## Develop
 

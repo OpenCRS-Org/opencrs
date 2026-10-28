@@ -306,25 +306,43 @@ def fetch_publisher(
     max_rounds: int = 0,
     max_pages: int = 0,
     timeout: float = 0.0,
+    total_timeout: float = 0.0,
     now: str | None = None,
 ) -> PublisherResult:
     """Runs the publisher check end to end: fetches the publisher's index and the
     documents it lists and returns what `publisher` would. HTTPS only; an address
     that isn't public is refused after DNS and on every redirect; proxy settings
-    are ignored. Zero limits mean the defaults: 50 MiB a page, 180 MiB in all, 5
-    rounds, 4000 pages, 120 seconds a request. The GIL is released while it
-    waits on the network. Raises OpenCRSError if the check still wanted URLs
-    after its last round."""
+    are ignored. Zero limits mean the defaults and a limit above the most allowed
+    is the most allowed: 50 MiB a page (most 50), 180 MiB in all (most 512; bytes
+    are counted as read and again once decompressed), 5 rounds (most 10), 4000
+    pages (most 10000), 120 seconds a request and 300 seconds for the whole
+    check (most 3600 each). A URL not fetched by the time the total runs out is
+    reported as not fetched.
+
+    The GIL is released while it waits on the network, which means a
+    KeyboardInterrupt or a signal handler can't run until the call returns.
+    There is no way to cancel it: `total_timeout` is what bounds it, so set it
+    to how long you are prepared to wait. Raises OpenCRSError if the check
+    still wanted URLs after its last round, or for a limit that is negative or
+    not a number."""
 
 def discover(
     domain: str,
     *,
     tokens: dict[str, str] | None = None,
-    allow_local_http: bool = False,
+    unsafe_allow_local_http: bool = False,
+    timeout: float = 0.0,
+    total_timeout: float = 0.0,
     now: str | None = None,
 ) -> DiscoveryResult:
     """Finds a publisher's specs and says which to trust, as `opencrs fetch`
     does (its `result`). `tokens` maps a domain to the bearer token for its
-    partner documents. `allow_local_http` is for local testing: it allows
-    http:// and connections to localhost. Raises OpenCRSError if the index
+    partner documents. `timeout` (default 30 s a request) and `total_timeout`
+    (default 300 s) are in seconds, at most 3600; the GIL is released while it
+    waits, and only `total_timeout` can end it early.
+
+    `unsafe_allow_local_http` is for local testing only: it lets a publisher
+    that is itself on localhost, 127.0.0.1 or [::1] use http:// and reach
+    localhost. A public publisher gets nothing from it. Do not set it in code
+    that checks publishers other people name. Raises OpenCRSError if the index
     itself can't be fetched or trusted."""

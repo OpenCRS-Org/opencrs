@@ -14,7 +14,8 @@ use opencrs::resolve::parse_ref;
 use opencrs::schema::SchemaOptions;
 use opencrs::strictest::Strictest;
 use pyo3::create_exception;
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
+use pyo3::marker::Ungil;
 use pyo3::prelude::*;
 use pyo3::pybacked::PyBackedBytes;
 use serde::{Deserialize, Serialize};
@@ -191,32 +192,64 @@ fn publisher(
     reply(&check_publisher(domain, &pages, missing, now))
 }
 
+/// A number of seconds from Python: a finite number, zero or more. One past
+/// an hour is an hour.
+fn seconds(name: &str, v: f64) -> PyResult<Duration> {
+    if !v.is_finite() || v < 0.0 {
+        return Err(fail(format!(
+            "{name} must be a number of seconds, zero or more"
+        )));
+    }
+    Duration::try_from_secs_f64(v.min(3600.0)).map_err(fail)
+}
+
+/// A count or size from Python: zero or more. One too big for a machine word
+/// is the largest, and the fetching clamps it to what it allows.
+fn size(name: &str, v: i128) -> PyResult<usize> {
+    if v < 0 {
+        return Err(fail(format!("{name} must be zero or more")));
+    }
+    Ok(usize::try_from(v).unwrap_or(usize::MAX))
+}
+
+/// Runs `work` with the GIL released, and turns a panic in it into an
+/// ordinary error.
+fn detached<T: Ungil + Send>(
+    py: Python<'_>,
+    work: impl FnOnce() -> T + Ungil + Send,
+) -> PyResult<T> {
+    py.detach(|| std::panic::catch_unwind(std::panic::AssertUnwindSafe(work)))
+        .map_err(|_| PyRuntimeError::new_err("internal error: the check panicked"))
+}
+
 #[pyfunction]
-#[pyo3(signature = (domain, max_document_bytes=0, max_total_bytes=0, max_rounds=0, max_pages=0, timeout_s=0.0, now=None))]
+#[pyo3(signature = (domain, max_document_bytes=0, max_total_bytes=0, max_rounds=0, max_pages=0, timeout_s=0.0, total_timeout_s=0.0, now=None))]
 #[allow(clippy::too_many_arguments)]
 fn fetch_publisher(
     py: Python<'_>,
     domain: &str,
-    max_document_bytes: usize,
-    max_total_bytes: usize,
-    max_rounds: usize,
-    max_pages: usize,
+    max_document_bytes: i128,
+    max_total_bytes: i128,
+    max_rounds: i128,
+    max_pages: i128,
     timeout_s: f64,
+    total_timeout_s: f64,
     now: Option<&str>,
 ) -> PyResult<String> {
     let now = parse_now(now.filter(|n| !n.is_empty())).map_err(fail)?;
-    if !timeout_s.is_finite() || timeout_s < 0.0 {
-        return Err(fail("timeout must be a number of seconds, zero or more"));
-    }
     let opts = opencrs_fetch::FetchOptions {
-        max_document_bytes,
-        max_total_bytes,
-        max_rounds,
-        max_pages,
-        timeout: Duration::from_secs_f64(timeout_s),
+        max_document_bytes: size("max_document_bytes", max_document_bytes)?,
+        max_total_bytes: size("max_total_bytes", max_total_bytes)?,
+        max_rounds: size("max_rounds", max_rounds)?,
+        max_pages: size("max_pages", max_pages)?,
+        timeout: seconds("timeout", timeout_s)?,
+        total_timeout: seconds("total_timeout", total_timeout_s)?,
+        // Nothing can reach a call that has let go of the GIL, so there is
+        // nothing to cancel it with: the total time limit is what bounds it.
+        cancel: None,
     };
     // The network waits happen with the GIL released.
-    let f = py.detach(|| opencrs_fetch::fetch_publisher(domain, now, &opts));
+    let f = detached(py, || opencrs_fetch::fetch_publisher(domain, now, &opts))?;
     if f.rounds_exhausted {
         return Err(fail(format!(
             "the publisher check still wanted URLs after its last round ({} rounds)",
@@ -227,21 +260,27 @@ fn fetch_publisher(
 }
 
 #[pyfunction]
-#[pyo3(signature = (domain, tokens=HashMap::new(), allow_local_http=false, now=None))]
+#[pyo3(signature = (domain, tokens=HashMap::new(), unsafe_allow_local_http=false, timeout_s=0.0, total_timeout_s=0.0, now=None))]
 fn discover(
     py: Python<'_>,
     domain: &str,
     tokens: HashMap<String, String>,
-    allow_local_http: bool,
+    unsafe_allow_local_http: bool,
+    timeout_s: f64,
+    total_timeout_s: f64,
     now: Option<&str>,
 ) -> PyResult<String> {
     let now = parse_now(now.filter(|n| !n.is_empty())).map_err(fail)?;
-    let r = py
-        .detach(|| opencrs_fetch::discover(domain, &tokens, allow_local_http, now))
-        .map_err(fail)?;
-    reply(&r)
+    let opts = opencrs_fetch::DiscoverOptions {
+        tokens,
+        allow_local_http: unsafe_allow_local_http,
+        timeout: seconds("timeout", timeout_s)?,
+        total_timeout: seconds("total_timeout", total_timeout_s)?,
+        cancel: None,
+    };
+    let d = detached(py, || opencrs_fetch::discover(domain, now, &opts))?.map_err(fail)?;
+    reply(&d.result)
 }
-
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("OpenCRSError", m.py().get_type::<OpenCRSError>())?;

@@ -4,9 +4,9 @@
 //! core's message.
 
 use chrono::{DateTime, FixedOffset};
-use napi::bindgen_prelude::{AsyncTask, Either, Object, Uint8Array, Unknown};
+use napi::bindgen_prelude::{Either, Object, Uint8Array, Unknown};
 use napi::bindgen_prelude::{ToNapiValue, TypeName};
-use napi::{Env, Error, Result, Task, ValueType, sys};
+use napi::{Env, Error, Result, ValueType, sys};
 use napi_derive::napi;
 use opencrs::batch;
 use opencrs::calc::{self, ScreenWidth};
@@ -21,6 +21,8 @@ use opencrs::strictest::Strictest;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 fn fail(e: impl std::fmt::Display) -> Error {
@@ -267,41 +269,128 @@ pub fn publisher(
     to_value(&check_publisher(&domain, &pages, missing, now))
 }
 
-/// Limits for `fetchPublisher`. A missing or zero number is the default.
+/// A way to stop a `fetchPublisher` or `discover` already under way: the
+/// JavaScript wrapper makes one for an `AbortSignal` and calls `cancel()`
+/// when it aborts.
+#[napi]
+pub struct CancelToken {
+    flag: Arc<AtomicBool>,
+}
+
+#[napi]
+impl CancelToken {
+    #[napi(constructor)]
+    #[allow(clippy::new_without_default)]
+    pub fn new() -> CancelToken {
+        CancelToken {
+            flag: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// Stops the work the token was given to, between pages and within a
+    /// read; its promise rejects.
+    #[napi]
+    pub fn cancel(&self) {
+        self.flag.store(true, Ordering::Relaxed);
+    }
+}
+
+/// Runs `work` on a thread of its own and returns a promise for it. The
+/// libuv pool is not used: it is four threads shared with `fs`, `dns`,
+/// `crypto` and `zlib` for the whole process, and a few calls waiting on
+/// slow servers would starve them all, however limited their time. A panic
+/// is a rejection, not a crash.
+fn spawn<'env>(
+    env: &'env Env,
+    work: impl FnOnce() -> Result<Value> + Send + 'static,
+) -> Result<Object<'env>> {
+    let (deferred, promise) = env.create_deferred::<Json, _>()?;
+    std::thread::spawn(move || {
+        let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(work))
+            .unwrap_or_else(|_| Err(fail("internal error: the check panicked")));
+        match out {
+            Ok(v) => deferred.resolve(move |_| Ok(Json(v))),
+            Err(e) => deferred.reject(e),
+        }
+    });
+    Ok(promise)
+}
+
+/// Limits for `fetchPublisher`. A missing or zero number is the default, and
+/// one above the most allowed is the most allowed.
 #[napi(object)]
 pub struct FetchPublisherOptions {
-    /// The most one page may be, in bytes (default 50 MiB).
+    /// The most one page may be, in bytes (default and most 50 MiB).
     pub max_document_bytes: Option<f64>,
-    /// The most all pages may be together (default 180 MiB).
+    /// The most all pages may be together, counting bytes read from the
+    /// network and again decompressed (default 180 MiB, most 512 MiB).
     pub max_total_bytes: Option<f64>,
-    /// How many times the core is asked (default 5).
-    pub max_rounds: Option<u32>,
-    /// How many URLs are fetched in all (default 4000).
-    pub max_pages: Option<u32>,
-    /// For one request, redirects included (default 120,000).
-    pub timeout_ms: Option<u32>,
+    /// How many times the core is asked (default 5, most 10).
+    pub max_rounds: Option<f64>,
+    /// How many URLs are fetched in all (default 4000, most 10000).
+    pub max_pages: Option<f64>,
+    /// For one request, redirects included (default 120000, most 3600000).
+    pub timeout_ms: Option<f64>,
+    /// For the whole check (default 300000, most 3600000).
+    pub total_timeout_ms: Option<f64>,
     /// An RFC 3339 time to check at (default: now).
     pub now: Option<String>,
 }
 
-fn bytes(v: Option<f64>) -> usize {
+/// A count or size from JavaScript: anything that isn't a positive number is
+/// the default (zero); infinity and the like saturate and are clamped later.
+fn count(v: Option<f64>) -> usize {
     v.filter(|v| *v > 0.0).map_or(0, |v| v as usize)
 }
 
-pub struct FetchPublisherTask {
-    domain: String,
-    opts: opencrs_fetch::FetchOptions,
-    now: Option<String>,
+/// A number of milliseconds; zero is the default.
+fn millis(v: Option<f64>) -> Duration {
+    v.filter(|v| *v > 0.0).map_or(Duration::ZERO, |v| {
+        Duration::try_from_secs_f64(v / 1000.0).unwrap_or(Duration::MAX)
+    })
 }
 
-#[napi]
-impl Task for FetchPublisherTask {
-    type Output = Value;
-    type JsValue = Json;
+fn cancel_flag(token: Option<&CancelToken>) -> Option<Arc<AtomicBool>> {
+    token.map(|t| t.flag.clone())
+}
 
-    fn compute(&mut self) -> Result<Value> {
-        let now = parse_time(self.now.as_deref())?;
-        let f = opencrs_fetch::fetch_publisher(&self.domain, now, &self.opts);
+/// Runs the publisher check end to end: fetches the publisher's index and
+/// the documents it lists, as the command line does (HTTPS only, no
+/// non-public address, no proxy, size caps), and resolves with the same
+/// result as `publisher`. Runs on a thread of its own, and is held to
+/// `totalTimeoutMs`. The index.js wrapper adds `signal`, an `AbortSignal`.
+#[napi(js_name = "fetchPublisher")]
+pub fn fetch_publisher<'env>(
+    env: &'env Env,
+    domain: String,
+    options: Option<FetchPublisherOptions>,
+    token: Option<&CancelToken>,
+) -> Result<Object<'env>> {
+    let o = options.unwrap_or(FetchPublisherOptions {
+        max_document_bytes: None,
+        max_total_bytes: None,
+        max_rounds: None,
+        max_pages: None,
+        timeout_ms: None,
+        total_timeout_ms: None,
+        now: None,
+    });
+    let opts = opencrs_fetch::FetchOptions {
+        max_document_bytes: count(o.max_document_bytes),
+        max_total_bytes: count(o.max_total_bytes),
+        max_rounds: count(o.max_rounds),
+        max_pages: count(o.max_pages),
+        timeout: millis(o.timeout_ms),
+        total_timeout: millis(o.total_timeout_ms),
+        cancel: cancel_flag(token),
+    };
+    let now = o.now;
+    spawn(env, move || {
+        let now = parse_time(now.as_deref())?;
+        let f = opencrs_fetch::fetch_publisher(&domain, now, &opts);
+        if f.cancelled {
+            return Err(fail("cancelled"));
+        }
         if f.rounds_exhausted {
             return Err(fail(format!(
                 "the publisher check still wanted URLs after its last round ({} rounds)",
@@ -309,41 +398,7 @@ impl Task for FetchPublisherTask {
             )));
         }
         to_value(&f.check)
-    }
-
-    fn resolve(&mut self, _env: Env, output: Value) -> Result<Json> {
-        Ok(Json(output))
-    }
-}
-
-/// Runs the publisher check end to end: fetches the publisher's index and
-/// the documents it lists, as the command line does (HTTPS only, no
-/// non-public address, no proxy, size caps), and resolves with the same
-/// result as `publisher`. Runs off the event loop.
-#[napi(js_name = "fetchPublisher")]
-pub fn fetch_publisher(
-    domain: String,
-    options: Option<FetchPublisherOptions>,
-) -> Result<AsyncTask<FetchPublisherTask>> {
-    let o = options.unwrap_or(FetchPublisherOptions {
-        max_document_bytes: None,
-        max_total_bytes: None,
-        max_rounds: None,
-        max_pages: None,
-        timeout_ms: None,
-        now: None,
-    });
-    Ok(AsyncTask::new(FetchPublisherTask {
-        domain,
-        now: o.now,
-        opts: opencrs_fetch::FetchOptions {
-            max_document_bytes: bytes(o.max_document_bytes),
-            max_total_bytes: bytes(o.max_total_bytes),
-            max_rounds: o.max_rounds.unwrap_or(0) as usize,
-            max_pages: o.max_pages.unwrap_or(0) as usize,
-            timeout: Duration::from_millis(o.timeout_ms.unwrap_or(0) as u64),
-        },
-    }))
+    })
 }
 
 /// Options for `discover`.
@@ -351,52 +406,51 @@ pub fn fetch_publisher(
 pub struct DiscoverOptions {
     /// Bearer tokens for partner documents, by publisher domain.
     pub tokens: Option<HashMap<String, String>>,
-    /// Local testing: allow http:// and connections to localhost.
-    pub allow_local_http: Option<bool>,
+    /// For local testing only: let a publisher that is itself on localhost
+    /// use `http://` and reach localhost. Anything else about a public
+    /// publisher is unchanged: it never gets to reach loopback. Do not set
+    /// this in code that checks publishers other people name.
+    pub unsafe_allow_local_http: Option<bool>,
+    /// For one request, redirects included (default 30000, most 3600000).
+    pub timeout_ms: Option<f64>,
+    /// For the whole run (default 300000, most 3600000).
+    pub total_timeout_ms: Option<f64>,
     /// An RFC 3339 time to judge expiry at (default: now).
     pub now: Option<String>,
 }
 
-pub struct DiscoverTask {
-    domain: String,
-    tokens: HashMap<String, String>,
-    allow_local_http: bool,
-    now: Option<String>,
-}
-
-#[napi]
-impl Task for DiscoverTask {
-    type Output = Value;
-    type JsValue = Json;
-
-    fn compute(&mut self) -> Result<Value> {
-        let now = parse_time(self.now.as_deref())?;
-        let r = opencrs_fetch::discover(&self.domain, &self.tokens, self.allow_local_http, now)
-            .map_err(fail)?;
-        to_value(&r)
-    }
-
-    fn resolve(&mut self, _env: Env, output: Value) -> Result<Json> {
-        Ok(Json(output))
-    }
-}
-
 /// Finds a publisher's specs and says which to trust, as `opencrs fetch
 /// DOMAIN --json` does (its `result`). Rejects if the index itself can't be
-/// fetched or trusted. Runs off the event loop.
+/// fetched or trusted. Runs on a thread of its own, held to
+/// `totalTimeoutMs`.
 #[napi]
-pub fn discover(
+pub fn discover<'env>(
+    env: &'env Env,
     domain: String,
     options: Option<DiscoverOptions>,
-) -> Result<AsyncTask<DiscoverTask>> {
-    let (tokens, allow_local_http, now) = match options {
-        Some(o) => (o.tokens, o.allow_local_http, o.now),
-        None => (None, None, None),
+    token: Option<&CancelToken>,
+) -> Result<Object<'env>> {
+    let o = options.unwrap_or(DiscoverOptions {
+        tokens: None,
+        unsafe_allow_local_http: None,
+        timeout_ms: None,
+        total_timeout_ms: None,
+        now: None,
+    });
+    let opts = opencrs_fetch::DiscoverOptions {
+        tokens: o.tokens.unwrap_or_default(),
+        allow_local_http: o.unsafe_allow_local_http.unwrap_or(false),
+        timeout: millis(o.timeout_ms),
+        total_timeout: millis(o.total_timeout_ms),
+        cancel: cancel_flag(token),
     };
-    Ok(AsyncTask::new(DiscoverTask {
-        domain,
-        tokens: tokens.unwrap_or_default(),
-        allow_local_http: allow_local_http.unwrap_or(false),
-        now,
-    }))
+    let now = o.now;
+    spawn(env, move || {
+        let now = parse_time(now.as_deref())?;
+        let d = opencrs_fetch::discover(&domain, now, &opts).map_err(fail)?;
+        if d.cancelled {
+            return Err(fail("cancelled"));
+        }
+        to_value(&d.result)
+    })
 }
