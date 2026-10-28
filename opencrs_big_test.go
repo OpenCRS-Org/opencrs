@@ -67,8 +67,9 @@ func TestLintAndCheckLargeDocument(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("lint: %v", time.Since(start))
-	// The unknown rule pack is one finding that lists all the screens.
-	if len(lint.DocumentChecks) != 1 || len(lint.DocumentChecks[0].Screens) != 190000 {
+	// The unknown rule pack is in the format's rules: one finding, for the
+	// format, not one listing every screen that inherits it.
+	if len(lint.DocumentChecks) != 1 || lint.DocumentChecks[0].Format != "fmt-0" || len(lint.DocumentChecks[0].Screens) != 0 {
 		t.Fatalf("lint found %+v", lint.DocumentChecks)
 	}
 

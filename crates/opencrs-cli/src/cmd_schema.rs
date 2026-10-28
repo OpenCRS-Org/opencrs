@@ -38,8 +38,11 @@ pub fn run(a: &SchemaArgs, stdout: &mut dyn Write, stderr: &mut dyn Write) -> i3
         };
         let line = |c: &Check| {
             let mut line = format!("  {:<18} {}", c.code, c.message);
+            if !c.scope_label().is_empty() {
+                line.push_str(&format!("  ({})", c.scope_label()));
+            }
             if !c.screens.is_empty() {
-                line.push_str(&format!("  [{}]", c.screens.join(", ")));
+                line.push_str(&format!("  [{}]", c.screens_label()));
             }
             line
         };

@@ -54,7 +54,7 @@ fn schema_command_reports_rule_conflicts() {
     assert_eq!(code, 1, "{out}");
     for want in [
         "2 document error(s)",
-        "CRS-RULE-CONFLICT  venue v restates the legal element within [0 0 1080 200], which doesn't overlap the inherited [0 1700 1080 220]; no creative can comply  [s1, s2]",
+        "CRS-RULE-CONFLICT  venue v restates the legal element within [0 0 1080 200], which doesn't overlap the inherited [0 1700 1080 220]; no creative can comply  (network n, venue v)",
         "CRS-REFERENCE      screen \"s4\" uses format \"nope\"",
     ] {
         assert!(out.contains(want), "missing {want:?} in:\n{out}");

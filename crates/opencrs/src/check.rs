@@ -57,14 +57,35 @@ pub struct Check {
     pub rect_px: Option<Rect>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub element: String,
+    /// For a finding about a screens.json that is caused at one level of it,
+    /// where: the network's id, with a venue's or a format's when the finding
+    /// is about that venue or format. Such a finding is reported once, not
+    /// once for each screen that inherits it, and lists no screens.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub network: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub venue: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub format: String,
+    /// The screens the finding applies to, in document order, when it
+    /// doesn't apply to every screen of the target: at most
+    /// [`MAX_SCREENS_LISTED`].
     #[serde(default, skip_serializing_if = "ScreenList::is_empty")]
     pub screens: ScreenList,
+    /// How many screens the finding applies to, set only when `screens` is
+    /// cut short.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub screens_total: Option<u64>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub source: String,
     /// Who attested to a check that needs a person's judgement, and when.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attestation: Option<Attested>,
 }
+
+/// The most screens a finding lists. A finding on more says how many in
+/// `screens_total`.
+pub const MAX_SCREENS_LISTED: usize = 1000;
 
 /// The ids of the screens a finding applies to. A finding on every screen of
 /// a large network would otherwise hold its own copy of each id, so the lists
@@ -208,9 +229,10 @@ impl ScreenTable {
     }
 
     /// Makes the lists for `found`, which are positions as `begin` gave them,
-    /// each list in order. A screen whose id came earlier in a list is
-    /// dropped from it.
-    pub(crate) fn lists(self, found: Vec<Vec<u32>>) -> Vec<ScreenList> {
+    /// each in order, with how many screens each has. A screen whose id came
+    /// earlier in a list is dropped from it, and a list is cut to
+    /// [`MAX_SCREENS_LISTED`].
+    pub(crate) fn lists(self, found: Vec<Vec<u32>>) -> Vec<(ScreenList, usize)> {
         let mut seen = std::collections::HashSet::with_capacity(self.ids.len());
         let repeats = !self.ids.iter().all(|i| seen.insert(i.as_str()));
         drop(seen);
@@ -222,7 +244,10 @@ impl ScreenTable {
                     let mut seen = std::collections::HashSet::new();
                     at.retain(|&i| seen.insert(table[i as usize].as_str()));
                 }
-                ScreenList::shared(table.clone(), at)
+                let total = at.len();
+                at.truncate(MAX_SCREENS_LISTED);
+                at.shrink_to_fit();
+                (ScreenList::shared(table.clone(), at), total)
             })
             .collect()
     }
@@ -238,6 +263,32 @@ pub struct Attested {
 }
 
 impl Check {
+    /// Where in a screens.json a finding is caused, as "network n, venue v",
+    /// or "" for a finding about screens.
+    pub fn scope_label(&self) -> String {
+        let mut parts = Vec::new();
+        for (name, id) in [
+            ("network", &self.network),
+            ("venue", &self.venue),
+            ("format", &self.format),
+        ] {
+            if !id.is_empty() {
+                parts.push(format!("{name} {id}"));
+            }
+        }
+        parts.join(", ")
+    }
+
+    /// The screens a finding lists, comma separated, and how many more it
+    /// applies to when the list is cut short; "" if it lists none.
+    pub fn screens_label(&self) -> String {
+        let mut out = self.screens.join(", ");
+        if let Some(total) = self.screens_total {
+            out += &format!(" and {} more", total - self.screens.len() as u64);
+        }
+        out
+    }
+
     /// A check with only the required fields set.
     pub fn new(code: &str, severity: Severity, message: impl Into<String>) -> Self {
         Check {
@@ -246,7 +297,11 @@ impl Check {
             message: message.into(),
             rect_px: None,
             element: String::new(),
+            network: String::new(),
+            venue: String::new(),
+            format: String::new(),
             screens: ScreenList::default(),
+            screens_total: None,
             source: String::new(),
             attestation: None,
         }

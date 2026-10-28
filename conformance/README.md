@@ -34,7 +34,7 @@ Each directory under `0.1/cases/` holds one case:
 - **Findings:**
   - Every expected finding must be present, with the same `code` and `severity`.
   - `element` must match where the case gives one.
-  - `screens` must match where the case gives them. A finding with no `screens` must apply to every screen of the target, so it lists none.
+  - `screens` must match where the case gives them. A finding with no `screens` must apply to every screen of the target, so it lists none. A finding lists at most 1,000 screens, in document order; when it applies to more, `screens_total` must give how many, and is otherwise absent.
   - Any other `error`, `warning` or `not_checked` finding fails the case. Extra `info` findings are allowed.
 - **Left to each validator:** message wording, `rect_px`, `source` and the report's other fields.
 
@@ -70,6 +70,7 @@ Each normative rule in the spec, and the cases that test it.
 | Spec rule | Cases |
 | --- | --- |
 | Canvas size (`CRS-PIXELS`) | `core-pixels`, `core-override-pixels`, `core-file-wins` |
+| A finding lists at most 1,000 screens and counts the rest (`screens_total`) | `core-screens-truncated` |
 | Accepted file types (`CRS-MEDIA-TYPE`) | `core-media-type` |
 | Maximum file size (`CRS-FILE-SIZE`) | `core-file-size` |
 | Duration matches the slot within one frame (`CRS-DURATION`) | `core-duration`, `core-file-duration` |

@@ -292,7 +292,13 @@ mod tests {
             c.message,
             "Rule pack au-nsw-transport-corridor@2017-12 isn't known to this validator, so creative won't be checked against it (known: au-nsw-transport-corridor@2017-11)"
         );
-        assert_eq!(c.screens, ["s"]);
+        // The pack is in the network's rules, so the finding is the network's,
+        // reported once, not the screen's.
+        assert_eq!(
+            (c.network.as_str(), c.venue.as_str(), c.format.as_str()),
+            ("n", "", "")
+        );
+        assert!(c.screens.is_empty());
     }
 
     fn harbourline_manifest() -> Manifest {

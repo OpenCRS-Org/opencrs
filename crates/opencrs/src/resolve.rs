@@ -228,6 +228,15 @@ impl Document {
         Ok(self.build(n, f, v, Some(s)))
     }
 
+    /// The conflicts a venue's rules make with its network's, which hold for
+    /// every screen at the venue whatever its format.
+    pub(crate) fn venue_conflicts(&self, n: &Network, v: &Venue) -> Vec<String> {
+        let mut r = Rules::default();
+        r.merge_at(n.rules.as_ref(), &format!("network {}", n.id));
+        r.merge_at(v.rules.as_ref(), &format!("venue {}", v.id));
+        r.conflicts
+    }
+
     pub(crate) fn build<'a>(
         &'a self,
         n: &'a Network,
@@ -853,7 +862,16 @@ mod tests {
         let checks = check_document(&d);
         assert_eq!(checks.len(), 1, "{checks:?}");
         assert_eq!(checks[0].code, CODE_RULE_CONFLICT);
-        assert_eq!(checks[0].screens.len(), 3);
+        // Caused by the venue's rules, so it is the venue's: once, with no screens.
+        assert!(checks[0].screens.is_empty());
+        assert_eq!(
+            (
+                checks[0].network.as_str(),
+                checks[0].venue.as_str(),
+                checks[0].format.as_str()
+            ),
+            ("retail", "harbour-central", "")
+        );
         assert_eq!(
             checks[0].message,
             "venue harbour-central restates the legal (offer) element within [0 0 1080 300], which doesn't overlap the inherited [0 1600 1080 320]; no creative can comply"

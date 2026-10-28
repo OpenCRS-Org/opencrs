@@ -69,7 +69,7 @@ for (const [name, data] of Object.entries(files)) {
 }
 
 // A document at the spec's 50 MB limit (190,000 screens, all on one format
-// that carries one finding) lints within 128 MiB and checks within 256 MiB,
+// that carries one finding, reported once) lints within 128 MiB and checks within 256 MiB,
 // and a target covering every screen answers in seconds, not minutes.
 {
   const rows = [];
@@ -85,7 +85,9 @@ for (const [name, data] of Object.entries(files)) {
   const linter = await load(wasmBytes);
   const lintBig = JSON.parse(linter.lint(big));
   assert.equal(lintBig.document_checks.length, 1);
-  assert.equal(lintBig.document_checks[0].screens.length, 190000);
+  // The pack is in the format's rules, so it is reported once, for the format.
+  assert.equal(lintBig.document_checks[0].format, "fmt-0");
+  assert.equal(lintBig.document_checks[0].screens, undefined);
   assert.ok(linter.memoryBytes() <= 128 * 1024 * 1024, `lint used ${linter.memoryBytes()} bytes`);
 
   const checker = await load(wasmBytes);

@@ -275,13 +275,13 @@ impl Merger {
 
     fn finish(self) -> Vec<Check> {
         let mut out = self.out;
-        for (c, list) in out.iter_mut().zip(self.table.lists(self.at)) {
+        for (c, (list, total)) in out.iter_mut().zip(self.table.lists(self.at)) {
             // A finding on every screen of the target lists none.
-            c.screens = if list.len() == self.screens {
-                ScreenList::default()
-            } else {
-                list
-            };
+            if total == self.screens {
+                continue;
+            }
+            c.screens = list;
+            c.screens_total = (total > c.screens.len()).then_some(total as u64);
         }
         out
     }

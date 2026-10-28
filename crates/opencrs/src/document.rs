@@ -15,12 +15,21 @@ use std::fmt;
 /// listing every screen they affect.
 struct Findings {
     out: Vec<Check>,
-    index: HashMap<(String, String), usize>,
+    index: HashMap<(String, String, [String; 3]), usize>,
     table: ScreenTable,
     /// For each finding, the positions (in `table`) of its screens.
     at: Vec<Vec<u32>>,
     /// The screen being checked; None outside one or for a screen with no id.
     cur: Option<u32>,
+}
+
+/// Where in a document a finding is caused: a network, and a venue or a
+/// format of it. Empty for a finding about screens.
+#[derive(Default, Clone, Copy)]
+struct Scope<'a> {
+    network: &'a str,
+    venue: &'a str,
+    format: &'a str,
 }
 
 impl Findings {
@@ -34,28 +43,35 @@ impl Findings {
         }
     }
 
-    /// Starts a screen: findings added until the next call are its.
+    /// Starts a screen: findings added until `end_screen` are its.
     fn begin(&mut self, id: &str) {
         let pos = self.table.begin(id);
         self.cur = (!id.is_empty()).then_some(pos);
     }
 
-    /// Findings added from here on are not any screen's.
     fn end_screen(&mut self) {
         self.cur = None;
     }
 
     fn add(&mut self, code: &str, msg: &str) {
-        self.add_as(code, Severity::Error, msg);
+        self.add_as(code, Severity::Error, msg, Scope::default());
     }
 
-    fn add_as(&mut self, code: &str, severity: Severity, msg: &str) {
-        let key = (code.to_string(), msg.to_string());
+    fn add_as(&mut self, code: &str, severity: Severity, msg: &str, scope: Scope) {
+        let key = (
+            code.to_string(),
+            msg.to_string(),
+            [scope.network, scope.venue, scope.format].map(String::from),
+        );
         let i = match self.index.get(&key) {
             Some(&i) => i,
             None => {
                 self.index.insert(key, self.out.len());
-                self.out.push(Check::new(code, severity, msg));
+                let mut c = Check::new(code, severity, msg);
+                c.network = scope.network.to_string();
+                c.venue = scope.venue.to_string();
+                c.format = scope.format.to_string();
+                self.out.push(c);
                 self.at.push(Vec::new());
                 self.out.len() - 1
             }
@@ -71,8 +87,9 @@ impl Findings {
 
     fn finish(self) -> Vec<Check> {
         let mut out = self.out;
-        for (c, list) in out.iter_mut().zip(self.table.lists(self.at)) {
+        for (c, (list, total)) in out.iter_mut().zip(self.table.lists(self.at)) {
             c.screens = list;
+            c.screens_total = (total > c.screens.len()).then_some(total as u64);
         }
         out
     }
@@ -84,46 +101,110 @@ impl Findings {
 /// CRS-RULE-CONFLICT for rules that tightening has made impossible to meet,
 /// both errors, and a CRS-RULE-PACK warning for a rule pack this validator
 /// doesn't know, which creative on those screens won't be checked against.
-/// Each finding lists the screens it affects.
+///
+/// A finding is reported where it is caused. A pack named in a network's,
+/// venue's or format's rules, or a conflict between a network's rules and a
+/// format's or a venue's, is reported once, scoped to that network, venue or
+/// format, not once for each screen that inherits it. Findings that arise
+/// from a screen itself, or from a venue and a format together, list the
+/// screens they affect, up to `MAX_SCREENS_LISTED`.
 pub fn check_document(d: &Document) -> Vec<Check> {
     let mut f = Findings::new();
     for n in &d.networks {
-        let mut used: HashSet<&str> = HashSet::new();
+        let scoped = check_network(d, n, &mut f);
         for s in &n.screens {
-            used.insert(&s.format);
-            check_screen(d, n, s, &mut f);
+            check_screen(d, n, s, &scoped, &mut f);
         }
-        check_unused_formats(d, n, |id| used.contains(id), &mut f);
     }
     f.finish()
 }
 
-fn check_screen(d: &Document, n: &Network, s: &Screen, f: &mut Findings) {
+/// What a network's venues and formats already account for, by id, so the
+/// screens that inherit it don't repeat it.
+struct Scoped {
+    venue_conflicts: HashMap<String, HashSet<String>>,
+    format_conflicts: HashMap<String, HashSet<String>>,
+}
+
+/// Reports what the network's own rules, its venues' and its formats' cause,
+/// each once.
+fn check_network(d: &Document, n: &Network, f: &mut Findings) -> Scoped {
+    let at = |venue, format| Scope {
+        network: &n.id,
+        venue,
+        format,
+    };
+    if let Some(r) = &n.rules {
+        unknown_packs(f, &r.rule_packs, at("", ""));
+    }
+    let mut scoped = Scoped {
+        venue_conflicts: HashMap::new(),
+        format_conflicts: HashMap::new(),
+    };
+    for v in &n.venues {
+        if let Some(r) = &v.rules {
+            unknown_packs(f, &r.rule_packs, at(&v.id, ""));
+        }
+        let conflicts = d.venue_conflicts(n, v);
+        for msg in &conflicts {
+            f.add_as(CODE_RULE_CONFLICT, Severity::Error, msg, at(&v.id, ""));
+        }
+        if !conflicts.is_empty() {
+            scoped
+                .venue_conflicts
+                .entry(v.id.clone())
+                .or_default()
+                .extend(conflicts);
+        }
+    }
+    for fm in &n.formats {
+        if let Some(r) = &fm.fields.rules {
+            unknown_packs(f, &r.rule_packs, at("", &fm.id));
+        }
+        let conflicts = d.build(n, fm, None, None).rules.conflicts;
+        for msg in &conflicts {
+            f.add_as(CODE_RULE_CONFLICT, Severity::Error, msg, at("", &fm.id));
+        }
+        if !conflicts.is_empty() {
+            scoped
+                .format_conflicts
+                .entry(fm.id.clone())
+                .or_default()
+                .extend(conflicts);
+        }
+    }
+    scoped
+}
+
+fn check_screen(d: &Document, n: &Network, s: &Screen, scoped: &Scoped, f: &mut Findings) {
     f.begin(&s.id);
     match d.resolve_screen(n, s) {
         Err(e) => f.add(CODE_REFERENCE, &e.to_string()),
         Ok(r) => {
-            for msg in &r.rules.conflicts {
+            let covered = |msg: &String| {
+                scoped
+                    .venue_conflicts
+                    .get(&s.venue)
+                    .is_some_and(|c| c.contains(msg))
+                    || scoped
+                        .format_conflicts
+                        .get(&s.format)
+                        .is_some_and(|c| c.contains(msg))
+            };
+            for msg in r.rules.conflicts.iter().filter(|m| !covered(m)) {
                 f.add(CODE_RULE_CONFLICT, msg);
             }
-            unknown_packs(f, &r.rules.rule_packs);
+            // The screen's own rules; the levels above it were reported.
+            let own = [
+                s.rules.as_deref(),
+                s.overrides.as_ref().and_then(|o| o.fields.rules.as_ref()),
+            ];
+            for rs in own.into_iter().flatten() {
+                unknown_packs(f, &rs.rule_packs, Scope::default());
+            }
         }
     }
     f.end_screen();
-}
-
-/// Formats no screen uses still carry network and format rules.
-fn check_unused_formats(d: &Document, n: &Network, used: impl Fn(&str) -> bool, f: &mut Findings) {
-    for fm in &n.formats {
-        if used(&fm.id) {
-            continue;
-        }
-        let r = d.build(n, fm, None, None);
-        for msg in &r.rules.conflicts {
-            f.add(CODE_RULE_CONFLICT, msg);
-        }
-        unknown_packs(f, &r.rules.rule_packs);
-    }
 }
 
 /// An object's members, in order, with each value left as the text it was.
@@ -199,22 +280,18 @@ pub fn check_document_text(raw: &str) -> Option<Vec<Check>> {
     d.networks = shells;
     let mut f = Findings::new();
     for (n, list) in d.networks.iter().zip(lists) {
-        let mut used: HashSet<String> = HashSet::new();
+        let scoped = check_network(&d, n, &mut f);
         for raw in list {
             let s: Screen = serde_json::from_str(raw.get()).ok()?;
-            if !used.contains(&s.format) {
-                used.insert(s.format.clone());
-            }
-            check_screen(&d, n, &s, &mut f);
+            check_screen(&d, n, &s, &scoped, &mut f);
         }
-        check_unused_formats(&d, n, |id| used.contains(id), &mut f);
     }
     Some(f.finish())
 }
 
 /// Warns about each referenced rule pack that isn't built in, naming the
 /// versions that are when only the version is wrong.
-fn unknown_packs(f: &mut Findings, refs: &[String]) {
+fn unknown_packs(f: &mut Findings, refs: &[String], scope: Scope) {
     let known = builtin_rule_packs();
     for reference in refs {
         if known.contains_key(reference) {
@@ -228,7 +305,7 @@ fn unknown_packs(f: &mut Findings, refs: &[String]) {
         if !versions.is_empty() {
             msg += &format!(" (known: {})", versions.join(", "));
         }
-        f.add_as(CODE_RULE_PACK, Severity::Warning, &msg);
+        f.add_as(CODE_RULE_PACK, Severity::Warning, &msg, scope);
     }
 }
 
@@ -294,9 +371,8 @@ mod tests {
             "opencrs": "0.1", "publisher": "p.example", "updated_at": "2026-01-01T00:00:00Z",
             "networks": [{
                 "id": "n", "name": "N",
-                "rules": {"rule_packs": ["x@1", "y@1"]},
                 "formats": [{"id": "f", "pixels": [1, 1], "media": {"static": ["image/png"]}}],
-                "screens": screens.iter().map(|i| json!({"id": i, "format": "f"})).collect::<Vec<_>>(),
+                "screens": screens.iter().map(|i| json!({"id": i, "format": "f", "rules": {"rule_packs": ["x@1", "y@1"]}})).collect::<Vec<_>>(),
             }],
         });
         let text = doc.to_string();
@@ -308,6 +384,54 @@ mod tests {
             }
             let out = serde_json::to_string(&checks[0]).unwrap();
             assert!(out.contains(r#""screens":["a","b","c","d"]"#), "{out}");
+        }
+    }
+
+    /// A pack named above the screens is reported once where it is named; a
+    /// finding on more than 1,000 screens lists the first 1,000 and counts.
+    #[test]
+    fn scoped_findings_are_reported_once_and_long_lists_are_cut() {
+        let screens: Vec<Value> = (0..2500)
+            .map(|i| json!({"id": format!("s{i}"), "format": "f", "venue": "v"}))
+            .collect();
+        let mut doc = json!({
+            "opencrs": "0.1", "publisher": "p.example", "updated_at": "2026-01-01T00:00:00Z",
+            "networks": [{
+                "id": "n", "name": "N",
+                "rules": {"rule_packs": ["net@1"]},
+                "venues": [{"id": "v", "name": "V", "rules": {"rule_packs": ["ven@1"]}}],
+                "formats": [{"id": "f", "pixels": [1, 1], "media": {"static": ["image/png"]},
+                    "rules": {"rule_packs": ["fmt@1"]}}],
+                "screens": screens,
+            }],
+        });
+        let text = doc.to_string();
+        let d: Document = serde_json::from_str(&text).unwrap();
+        for checks in [check_document(&d), check_document_text(&text).unwrap()] {
+            let scopes: Vec<_> = checks
+                .iter()
+                .map(|c| (c.network.as_str(), c.venue.as_str(), c.format.as_str()))
+                .collect();
+            assert_eq!(scopes, [("n", "", ""), ("n", "v", ""), ("n", "", "f")]);
+            assert!(
+                checks
+                    .iter()
+                    .all(|c| c.screens.is_empty() && c.screens_total.is_none())
+            );
+        }
+        // Unknown packs on 2,500 screens: the list stops at 1,000.
+        for s in doc["networks"][0]["screens"].as_array_mut().unwrap() {
+            s["rules"] = json!({"rule_packs": ["own@1"]});
+        }
+        let text = doc.to_string();
+        let d: Document = serde_json::from_str(&text).unwrap();
+        for checks in [check_document(&d), check_document_text(&text).unwrap()] {
+            let own = checks.iter().find(|c| c.message.contains("own@1")).unwrap();
+            assert_eq!(own.screens.len(), 1000);
+            assert_eq!(own.screens_total, Some(2500));
+            assert_eq!(own.screens.iter().last(), Some("s999"));
+            let out = serde_json::to_string(own).unwrap();
+            assert!(out.contains(r#""screens_total":2500"#), "{}", &out[..120]);
         }
     }
 }
