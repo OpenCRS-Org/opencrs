@@ -28,6 +28,10 @@ pub struct Request {
     /// Refuse redirects to another host. Indexes and anything carrying a
     /// token use it, so neither can be handed elsewhere.
     pub same_host: bool,
+    /// The request is for a publisher's index (`/.well-known/opencrs.json`),
+    /// not a document. Fetchers may ignore it; it tells a caller that
+    /// fetches for discovery what it is being asked for.
+    pub index: bool,
 }
 
 /// Why a fetch failed.

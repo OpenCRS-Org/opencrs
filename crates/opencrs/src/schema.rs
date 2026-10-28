@@ -276,12 +276,20 @@ pub(crate) fn validate_detecting(
     opt: &SchemaOptions,
 ) -> Result<(Kind, Vec<SchemaError>), Error> {
     let all = schemas()?;
-    if kind.is_none_or(|k| k == Kind::Screens)
-        && let Some((errs, is_screens)) =
-            validate_screens_by_item(all.items()?, all.validator(Kind::Screens)?, raw)
+    let by_item = if kind.is_none_or(|k| k == Kind::Screens) {
+        validate_screens_by_item(all.items()?, all.validator(Kind::Screens)?, raw)
+    } else {
+        None
+    };
+    if let Some((errs, is_screens)) = by_item
         && (kind.is_some() || is_screens)
     {
         return Ok((Kind::Screens, errs));
+    }
+    // Stopped by the host part way: not a document the by-item reading
+    // doesn't suit, so don't read it again.
+    if crate::budget::interrupted() {
+        return Err(Error::msg(crate::budget::INTERRUPTED_CODE));
     }
     let kind = match kind {
         Some(k) => k,
@@ -620,6 +628,9 @@ mod by_item {
             let mut i = 0usize;
             let mut path = self.prefix.clone();
             while let Some(v) = seq.next_element::<Value>()? {
+                if crate::budget::checkpoint() {
+                    return Err(serde::de::Error::custom(crate::budget::INTERRUPTED_CODE));
+                }
                 path.truncate(self.prefix.len());
                 path.push('/');
                 path.push_str(&i.to_string());

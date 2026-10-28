@@ -1,6 +1,7 @@
 package opencrs
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -146,7 +147,7 @@ func TestResolveStrictestLargeFormat(t *testing.T) {
 	ref := "big.example/net/fmt-0"
 	// The same call ResolveStrictest makes, on an instance kept to read how
 	// far its memory grew: it only grows, so its size is the peak.
-	in, err := newInstance()
+	in, err := newInstance(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}

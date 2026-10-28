@@ -27,7 +27,7 @@
   <a href="https://pkg.go.dev/opencrs.dev/go"><img alt="Go reference" src="https://pkg.go.dev/badge/opencrs.dev/go.svg"></a>
   <br>
   <img alt="Rust 1.95" src="https://img.shields.io/badge/rust-1.95-121216?logo=rust&logoColor=white">
-  <img alt="WebAssembly" src="https://img.shields.io/badge/webassembly-zero%20imports-654FF0?logo=webassembly&logoColor=white">
+  <img alt="WebAssembly" src="https://img.shields.io/badge/webassembly-one%20import-654FF0?logo=webassembly&logoColor=white">
   <a href="LICENSE"><img alt="Code: Apache 2.0" src="https://img.shields.io/badge/code-Apache%202.0-blue"></a>
   <a href="LICENSE-SPEC"><img alt="Spec: CC BY 4.0" src="https://img.shields.io/badge/spec-CC%20BY%204.0-blue"></a>
 </p>

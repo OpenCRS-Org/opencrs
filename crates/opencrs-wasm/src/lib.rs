@@ -1,5 +1,8 @@
-//! OpenCRS core as a plain-ABI WebAssembly module: no wasm-bindgen, no
-//! imports. Memory is the only way in or out.
+//! OpenCRS core as a plain-ABI WebAssembly module: no wasm-bindgen. Memory
+//! is the only way in or out, plus one import, `env.opencrs_interrupted() ->
+//! i32`: the module calls it every so often during long work, and if it
+//! returns non-zero the call stops and answers `{"error": "CRS-INTERRUPTED"}`.
+//! A host with no way to stop a call returns 0.
 //!
 //! Every operation takes a request at `(ptr, len)` and returns
 //! `(ptr << 32) | len` of a UTF-8 JSON response that the caller frees with
@@ -10,7 +13,8 @@
 //! holds an escaped copy beside the decoded one:
 //!
 //! - `opencrs_lint`: the request is the document itself.
-//! - `opencrs_check`, `opencrs_resolve` and `opencrs_resolve_strictest`: the request is a frame, a
+//! - `opencrs_check`, `opencrs_resolve`, `opencrs_resolve_strictest` and
+//!   `opencrs_publisher`: the request is a frame, a
 //!   little-endian u32 `n`, then `n` bytes of JSON header, then the
 //!   documents back to back. The header's `blobs` lists their lengths.
 //!   `check` takes the manifest, then each spec; `resolve` and
@@ -99,7 +103,24 @@ mod ops {
         reply(&json!({ "version": SPEC_VERSION }))
     }
 
+    /// Runs an operation that the host may stop (see
+    /// `opencrs::budget::checkpoint`): if it did, whatever the operation
+    /// made is dropped for an error that says so.
+    fn stoppable(f: impl FnOnce() -> Vec<u8>) -> Vec<u8> {
+        opencrs::budget::clear_interrupt();
+        let out = f();
+        if opencrs::budget::interrupted() {
+            opencrs::budget::clear_interrupt();
+            return error(opencrs::budget::INTERRUPTED_CODE);
+        }
+        out
+    }
+
     pub fn lint(doc: &[u8]) -> Vec<u8> {
+        stoppable(|| lint_inner(doc))
+    }
+
+    fn lint_inner(doc: &[u8]) -> Vec<u8> {
         let opt = SchemaOptions {
             list: true,
             ..SchemaOptions::default()
@@ -190,7 +211,7 @@ mod ops {
     }
 
     pub fn check(req: Vec<u8>) -> Vec<u8> {
-        try_check(req).unwrap_or_else(|e| e)
+        stoppable(|| try_check(req).unwrap_or_else(|e| e))
     }
 
     #[derive(Deserialize)]
@@ -233,7 +254,7 @@ mod ops {
     }
 
     pub fn resolve(req: Vec<u8>) -> Vec<u8> {
-        try_resolve(req).unwrap_or_else(|e| e)
+        stoppable(|| try_resolve(req).unwrap_or_else(|e| e))
     }
 
     #[derive(Deserialize)]
@@ -260,7 +281,7 @@ mod ops {
     }
 
     pub fn resolve_strictest(req: Vec<u8>) -> Vec<u8> {
-        try_resolve_strictest(req).unwrap_or_else(|e| e)
+        stoppable(|| try_resolve_strictest(req).unwrap_or_else(|e| e))
     }
 
     #[derive(Deserialize)]
@@ -328,20 +349,42 @@ mod ops {
         }
     }
 
+    /// A page's headers, by the URL it was fetched from. Its body is the
+    /// blob at the same position in the frame.
+    #[derive(Deserialize)]
+    struct PageEntry {
+        url: String,
+        #[serde(flatten)]
+        page: Page<'static>,
+    }
+
     #[derive(Deserialize)]
     struct PublisherReq {
         domain: String,
-        pages: BTreeMap<String, Page>,
+        pages: Vec<PageEntry>,
         now: String,
         #[serde(default)]
         missing: String,
     }
 
-    fn try_publisher(req: &[u8]) -> Result<Vec<u8>, Vec<u8>> {
-        let r: PublisherReq = parse(
-            req,
-            r#"{"domain": "...", "pages": {url: {"status", "body", ...}}, "now": "RFC 3339", "missing"?: "..."}"#,
+    fn try_publisher(req: Vec<u8>) -> Result<Vec<u8>, Vec<u8>> {
+        let f: Frame<PublisherReq> = frame(
+            &req,
+            r#"{"domain": "...", "pages": [{"url", "status", ...}], "now": "RFC 3339", "missing"?: "...", "blobs": [body of each page]}"#,
         )?;
+        let r = f.header;
+        if r.pages.len() != f.blobs.len() {
+            return Err(error(
+                "usage: publisher needs one blob for each page, in order",
+            ));
+        }
+        // The bodies stay where they arrived; a page borrows its own.
+        let pages: BTreeMap<String, Page<'_>> = r
+            .pages
+            .into_iter()
+            .zip(f.blobs)
+            .map(|(e, body)| (e.url, Page { body, ..e.page }))
+            .collect();
         let now = DateTime::parse_from_rfc3339(&r.now).map_err(error)?;
         let missing = if r.missing.is_empty() {
             "not fetched"
@@ -349,12 +392,12 @@ mod ops {
             &r.missing
         };
         Ok(reply(&json!(check_publisher(
-            &r.domain, &r.pages, missing, now
+            &r.domain, &pages, missing, now
         ))))
     }
 
-    pub fn publisher(req: &[u8]) -> Vec<u8> {
-        try_publisher(req).unwrap_or_else(|e| e)
+    pub fn publisher(req: Vec<u8>) -> Vec<u8> {
+        stoppable(|| try_publisher(req).unwrap_or_else(|e| e))
     }
 
     pub fn rule_packs(_req: &[u8]) -> Vec<u8> {
@@ -620,13 +663,35 @@ mod ops {
 
         #[test]
         fn publisher_check() {
-            let v = val(publisher(
-                br#"{"domain":"harbourline.example","pages":{"https://harbourline.example/.well-known/opencrs.json":{"status":404}},"now":"2026-10-25T12:00:00Z"}"#,
-            ));
+            const INDEX: &str = "https://harbourline.example/.well-known/opencrs.json";
+            let ask = |pages: Value, bodies: &[&[u8]]| {
+                val(publisher(framed(
+                    json!({"domain": "harbourline.example", "pages": pages, "now": "2026-10-25T12:00:00Z"}),
+                    bodies,
+                )))
+            };
+            let v = ask(json!([{"url": INDEX, "status": 404}]), &[b""]);
             assert!(v["error"].as_str().unwrap().contains("HTTP 404"), "{v}");
             assert_eq!(v["errors"], 1);
+            assert_eq!(v["wanted"], json!([]));
+            let v = ask(json!([]), &[]);
+            assert_eq!(v["wanted"], json!([INDEX]));
+            assert_eq!(
+                v["wanted_detail"],
+                json!([{"url": INDEX, "kind": "index", "same_host": true}])
+            );
+            // Bodies are bytes, not JSON text: markup and non-UTF-8 arrive
+            // as they are, and the index is read from its blob.
+            let v = ask(
+                json!([{"url": INDEX, "status": 200, "content_type": "application/json"}]),
+                &[b"<&>\xff"],
+            );
+            assert!(v["error"].is_string() && v["errors"] == 1, "{v}");
+            // One blob for each page.
+            let v = ask(json!([{"url": INDEX, "status": 200}]), &[]);
+            assert!(v["error"].as_str().unwrap().starts_with("usage:"), "{v}");
             assert!(
-                val(publisher(b"{}"))["error"]
+                val(publisher(b"{}".to_vec()))["error"]
                     .as_str()
                     .unwrap()
                     .starts_with("usage:")
@@ -710,10 +775,10 @@ mod abi {
     consuming!(opencrs_check, ops::check);
     consuming!(opencrs_resolve, ops::resolve);
     consuming!(opencrs_resolve_strictest, ops::resolve_strictest);
+    consuming!(opencrs_publisher, ops::publisher);
     op!(opencrs_legibility, ops::legibility);
     op!(opencrs_dwell, ops::dwell);
     op!(opencrs_rule_packs, ops::rule_packs);
-    op!(opencrs_publisher, ops::publisher);
     op!(opencrs_probe_start, ops::probe_start);
 
     #[unsafe(no_mangle)]

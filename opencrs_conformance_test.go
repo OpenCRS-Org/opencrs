@@ -1,6 +1,7 @@
 package opencrs
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -204,7 +205,7 @@ func compareStrictest(c *ccase, spec []byte) []string {
 		// The result is read as the module wrote it, not through the typed
 		// result, so a list that is empty on purpose stays an empty list.
 		var raw map[string]any
-		err := runWith(&raw, func(in *instance) ([]byte, error) {
+		err := runWith(context.Background(), &raw, func(in *instance) ([]byte, error) {
 			return in.callDocs("opencrs_resolve_strictest", map[string]any{"ref": s.Ref}, spec)
 		})
 		if s.Error != "" {

@@ -41,6 +41,8 @@ pub fn run_with(
         now: n.with_timezone(n.offset()),
         max_index_entries: 0,
         max_run_bytes: 0,
+        max_fetches: 0,
+        keep_raw: true,
     };
     for t in tokens {
         match t.split_once('=') {
@@ -154,6 +156,9 @@ pub fn run_with(
             line.push_str(&format!(": {}", dr.error));
         }
         let _ = writeln!(stdout, "{line}");
+    }
+    for why in &res.limits {
+        let _ = writeln!(stdout, "  limit     {why}");
     }
     if let Some(v) = &verified {
         let _ = writeln!(stdout, "\n{target}: {}. {}", v.status, v.reason);

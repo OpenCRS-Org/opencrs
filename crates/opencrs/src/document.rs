@@ -449,6 +449,7 @@ pub fn check_document_text(raw: &str) -> Option<Vec<Check>> {
         let mut de = serde_json::Deserializer::from_str(list.get());
         let mut stopped = false;
         let mut each = |s: Screen| {
+            crate::budget::checkpoint();
             if crate::budget::tripped() {
                 stopped = true;
                 return false;

@@ -90,6 +90,7 @@ fn token_is_sent_as_bearer() {
             url: format!("{}/", srv.url()),
             token: Some("t0k".into()),
             same_host: false,
+            index: false,
         })
         .unwrap();
     assert_eq!(r.body, b"Bearer t0k");

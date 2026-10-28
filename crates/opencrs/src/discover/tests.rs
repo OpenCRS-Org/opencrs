@@ -94,6 +94,8 @@ fn opts() -> Options {
         now: now(),
         max_index_entries: 0,
         max_run_bytes: 0,
+        max_fetches: 0,
+        keep_raw: true,
     }
 }
 
@@ -732,4 +734,123 @@ fn only_trusted_documents_keep_their_bytes() {
     let d = by_url(&res, foreign);
     assert_eq!(d.status, Status::Rejected);
     assert!(d.raw.is_empty());
+}
+
+/// A publisher chooses every URL a check fetches. Addresses, local-only names
+/// and URLs with a password in them are rejected with a reason and never
+/// requested, and an address can't be a delegate's domain.
+#[test]
+fn urls_that_point_inside_are_rejected_without_a_request() {
+    let mut f = Fake::default();
+    let bad = [
+        "https://127.0.0.1:6379/x",
+        "https://169.254.169.254/latest/meta-data/",
+        "https://user:pw@spec.example/admin",
+        "https://user@10.0.0.1:8443/admin",
+        "https://[::1]/",
+        "https://[fd00::1]/x",
+        "https://0x7f.1/x",
+        "https://2130706433/x",
+        "https://metadata.google.internal/x",
+        "https://printer.local/x",
+        "https://localhost/x",
+        "https://app.localhost/x",
+    ];
+    let good = "https://p.example/ok.screens.json";
+    let mut docs: Vec<_> = bad.iter().map(|u| doc(u, "")).collect();
+    docs.push(doc(good, ""));
+    let dels = [
+        delegate("10.0.0.5", ""),
+        delegate("127.0.0.1", ""),
+        delegate("169.254.169.254", ""),
+        delegate("metadata.google.internal", ""),
+    ];
+    f.put(idx_url("p.example"), index("p.example", &docs, &dels));
+    f.put(good, screens("p.example", "n", &["S1"]));
+    let res = discover("p.example", &opts(), &f).unwrap();
+    for u in bad {
+        let d = by_url(&res, u);
+        assert_eq!(d.status, Status::Rejected, "{u}");
+        assert!(
+            !d.reason.is_empty() && d.raw.is_empty(),
+            "{u}: {}",
+            d.reason
+        );
+    }
+    assert_eq!(by_url(&res, good).status, Status::Trusted);
+    for dr in &res.delegates {
+        assert!(
+            dr.error.contains("isn't a publisher domain"),
+            "{}: {}",
+            dr.domain,
+            dr.error
+        );
+    }
+    // Only the index and the one good document were requested.
+    let mut asked: Vec<String> = f.tokens.borrow().keys().cloned().collect();
+    asked.sort();
+    let mut want = [good.to_string(), idx_url("p.example")];
+    want.sort();
+    assert_eq!(asked, want);
+    // Local testing still reaches localhost.
+    let local = Options {
+        allow_local_http: true,
+        ..opts()
+    };
+    assert!(unfetchable("http://localhost:8080/a.json", &local).is_none());
+    assert!(unfetchable("http://localhost:8080/a.json", &opts()).is_some());
+    assert!(is_dns_name("harbourline.example"));
+    assert!(!is_dns_name("10.0.0.5") && !is_dns_name("a.1") && !is_dns_name("x.internal"));
+}
+
+/// One index can't make a check fetch without end: the run stops at its
+/// limit, with a reason in `limits`, and a delegate gets a smaller share.
+#[test]
+fn fetches_are_capped_per_run_and_per_delegate() {
+    let mut f = Fake::default();
+    let urls = |host: &str, n: usize| -> Vec<IndexDocument> {
+        (0..n)
+            .map(|i| doc(&format!("https://{host}/d{i}.screens.json"), ""))
+            .collect()
+    };
+    f.put(
+        idx_url("p.example"),
+        index(
+            "p.example",
+            &urls("cdn.example", 300),
+            &[delegate("d1.example", ""), delegate("d2.example", "")],
+        ),
+    );
+    for (d, victim) in [("d1.example", "v1.example"), ("d2.example", "v2.example")] {
+        f.put(idx_url(d), index(d, &urls(victim, 400), &[]));
+    }
+    // A delegate's share is 250 documents.
+    let res = discover("p.example", &opts(), &f).unwrap();
+    let asked = f.tokens.borrow().len();
+    // The index, 300 own documents, two delegate indexes and 250 each.
+    assert_eq!(asked, 1 + 300 + 2 + 2 * 250, "{asked}");
+    assert_eq!(res.limits.len(), 2, "{:?}", res.limits);
+    assert!(
+        res.limits[0].contains("only the first 250"),
+        "{:?}",
+        res.limits
+    );
+
+    // The run as a whole: 100 fetches in all.
+    let f2 = Fake {
+        bodies: f.bodies.clone(),
+        ..Fake::default()
+    };
+    let opt = Options {
+        max_fetches: 100,
+        ..opts()
+    };
+    let res = discover("p.example", &opt, &f2).unwrap();
+    assert_eq!(f2.tokens.borrow().len(), 100);
+    assert_eq!(res.documents.len(), 99);
+    assert!(
+        res.limits[0].contains("only the first 99") && res.limits[0].contains("at most 100 URLs"),
+        "{:?}",
+        res.limits
+    );
 }

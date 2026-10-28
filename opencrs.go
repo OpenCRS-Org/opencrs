@@ -1,6 +1,22 @@
 // Package opencrs checks creative files against OpenCRS screen specs. It
 // embeds the OpenCRS core, compiled to WebAssembly, and runs it with wazero,
 // so it needs no cgo and behaves the same on every platform.
+//
+// Every call has a Context variant. When the context ends, a running call
+// stops and returns an error wrapping ctx.Err(), so errors.Is(err,
+// context.DeadlineExceeded) and errors.Is(err, context.Canceled) work.
+//
+// The stop is cooperative: the module asks the host, every few thousand
+// units of its work and between screens, whether the context has ended, and
+// winds down if so. That costs nothing measurable, so a context that can end
+// runs at full speed. On a 50 MB document a stop comes within about 40 ms of
+// the deadline. It cannot come inside a single step that doesn't poll: the
+// first reading of a document's top level, one very large screen, or
+// building the answer once the work is done. Use a deadline for documents
+// you don't trust.
+//
+// Publisher checks a publisher's published specs from pages you fetch; see
+// its documentation for the loop of fetching the URLs it wants.
 package opencrs
 
 import (
@@ -43,6 +59,10 @@ var (
 	loadErr  error
 )
 
+// interruptedMsg is the module's answer to a call it stopped because the host
+// told it to (see the "env" module below).
+const interruptedMsg = `{"error":"CRS-INTERRUPTED"}`
+
 func load() (wazero.Runtime, wazero.CompiledModule, error) {
 	once.Do(func() {
 		ctx := context.Background()
@@ -50,7 +70,25 @@ func load() (wazero.Runtime, wazero.CompiledModule, error) {
 			WithCompilationCache(wazero.NewCompilationCache()).
 			WithMemoryLimitPages(maxMemoryPages)
 		runtime_ = wazero.NewRuntimeWithConfig(ctx, cfg)
-		compiled, loadErr = runtime_.CompileModule(ctx, wasmBytes)
+		// The module's one import: every so often during long work it asks
+		// whether to stop. The ctx a host function gets is the one the
+		// running call was made with, which is the caller's. Nothing in the
+		// wasm code is instrumented for this, so it costs nothing to run
+		// under a context that can end.
+		_, loadErr = runtime_.NewHostModuleBuilder("env").
+			NewFunctionBuilder().
+			WithGoModuleFunction(api.GoModuleFunc(func(ctx context.Context, _ api.Module, stack []uint64) {
+				if ctx.Err() != nil {
+					stack[0] = 1
+				} else {
+					stack[0] = 0
+				}
+			}), nil, []api.ValueType{api.ValueTypeI32}).
+			Export("opencrs_interrupted").
+			Instantiate(ctx)
+		if loadErr == nil {
+			compiled, loadErr = runtime_.CompileModule(ctx, wasmBytes)
+		}
 	})
 	return runtime_, compiled, loadErr
 }
@@ -58,6 +96,8 @@ func load() (wazero.Runtime, wazero.CompiledModule, error) {
 // instance is one module instance. It is not safe for concurrent use; each
 // public call takes its own, from idle ones kept for reuse when there are any.
 type instance struct {
+	// ctx is the context of the call the instance is serving. A reused
+	// instance is given its new caller's context when it is taken.
 	ctx context.Context
 	mod api.Module
 	// dirty is set when a call failed, which can leave the module holding
@@ -78,12 +118,18 @@ var (
 	idle   []*instance
 )
 
-func newInstance() (*instance, error) {
+// newInstance returns an instance that will run under ctx. It does not take
+// one from the pool, or make one, if ctx has already ended.
+func newInstance(ctx context.Context) (*instance, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("opencrs: %w", err)
+	}
 	idleMu.Lock()
 	if n := len(idle); n > 0 {
 		in := idle[n-1]
 		idle = idle[:n-1]
 		idleMu.Unlock()
+		in.ctx = ctx
 		return in, nil
 	}
 	idleMu.Unlock()
@@ -91,10 +137,9 @@ func newInstance() (*instance, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opencrs: loading the module: %w", err)
 	}
-	ctx := context.Background()
 	mod, err := rt.InstantiateModule(ctx, cm, wazero.NewModuleConfig().WithName("").WithStartFunctions())
 	if err != nil {
-		return nil, fmt.Errorf("opencrs: instantiating the module: %w", err)
+		return nil, wrapCtx(ctx, fmt.Errorf("opencrs: instantiating the module: %w", err))
 	}
 	in := &instance{ctx: ctx, mod: mod}
 	// The module builds its schema validators the first time it needs
@@ -103,8 +148,8 @@ func newInstance() (*instance, error) {
 	// the next one fits, not a heap that has to grow past live validators.
 	for _, doc := range warmDocs {
 		if _, err := in.callRaw("opencrs_lint", []byte(doc)); err != nil {
-			_ = mod.Close(ctx)
-			return nil, fmt.Errorf("opencrs: preparing the module: %w", err)
+			_ = mod.Close(context.Background())
+			return nil, wrapCtx(ctx, fmt.Errorf("opencrs: preparing the module: %w", err))
 		}
 	}
 	return in, nil
@@ -119,7 +164,11 @@ var warmDocs = []string{
 // close ends a call: the instance goes back to be reused if it is in a clean
 // state and small, and is closed otherwise.
 func (in *instance) close() {
-	if !in.dirty && in.mod.Memory().Size() <= idleMemory*65536 {
+	// An instance whose context has ended may have been closed by wazero,
+	// so it is not kept either.
+	if !in.dirty && in.ctx.Err() == nil && !in.mod.IsClosed() && in.mod.Memory().Size() <= idleMemory*65536 {
+		// Nothing idle holds on to a caller's context.
+		in.ctx = context.Background()
 		idleMu.Lock()
 		if len(idle) < maxIdle {
 			idle = append(idle, in)
@@ -128,7 +177,17 @@ func (in *instance) close() {
 		}
 		idleMu.Unlock()
 	}
-	_ = in.mod.Close(in.ctx)
+	_ = in.mod.Close(context.Background())
+}
+
+// wrapCtx makes the error from a stopped call wrap the context's error, so
+// callers can test it with errors.Is(err, context.DeadlineExceeded) and the
+// like. wazero reports a stopped call as an exit error of its own.
+func wrapCtx(ctx context.Context, err error) error {
+	if ce := ctx.Err(); ce != nil && !errors.Is(err, ce) {
+		return fmt.Errorf("%w: %w", err, ce)
+	}
+	return err
 }
 
 func (in *instance) fn(name string) (api.Function, error) {
@@ -158,7 +217,7 @@ func (in *instance) put(data []byte) (ptr uint32, err error) {
 	}
 	r, err := alloc.Call(in.ctx, uint64(len(data)))
 	if err != nil {
-		return 0, err
+		return 0, wrapCtx(in.ctx, err)
 	}
 	ptr = uint32(r[0])
 	if len(data) > 0 && !in.mod.Memory().Write(ptr, data) {
@@ -202,7 +261,7 @@ func (in *instance) call(name string, req any) ([]byte, error) {
 	defer in.free(ptr, uint32(len(data)))
 	r, err := f.Call(in.ctx, uint64(ptr), uint64(len(data)))
 	if err != nil {
-		return nil, fmt.Errorf("opencrs: %s: %w", name, err)
+		return nil, wrapCtx(in.ctx, fmt.Errorf("opencrs: %s: %w", name, err))
 	}
 	return in.take(r[0])
 }
@@ -237,7 +296,7 @@ func (in *instance) callDocs(name string, req map[string]any, docs ...[]byte) ([
 	}
 	r, err := alloc.Call(in.ctx, uint64(total))
 	if err != nil {
-		return nil, err
+		return nil, wrapCtx(in.ctx, err)
 	}
 	ptr := uint32(r[0])
 	mem := in.mod.Memory()
@@ -252,7 +311,7 @@ func (in *instance) callDocs(name string, req map[string]any, docs ...[]byte) ([
 	}
 	r, err = f.Call(in.ctx, uint64(ptr), uint64(total))
 	if err != nil {
-		return nil, fmt.Errorf("opencrs: %s: %w", name, err)
+		return nil, wrapCtx(in.ctx, fmt.Errorf("opencrs: %s: %w", name, err))
 	}
 	return in.take(r[0])
 }
@@ -270,9 +329,29 @@ func (in *instance) callRaw(name string, data []byte) ([]byte, error) {
 	defer in.free(ptr, uint32(len(data)))
 	r, err := f.Call(in.ctx, uint64(ptr), uint64(len(data)))
 	if err != nil {
-		return nil, fmt.Errorf("opencrs: %s: %w", name, err)
+		return nil, wrapCtx(in.ctx, fmt.Errorf("opencrs: %s: %w", name, err))
 	}
 	return in.take(r[0])
+}
+
+// ErrTooComplex is wrapped by the error from a call that stopped because
+// the document asked for more work than the module allows for its size
+// (CRS-TOO-COMPLEX). It is a safeguard, not a fault in the document, which
+// may be valid. Test for it with errors.Is(err, ErrTooComplex); the error's
+// text starts with "CRS-TOO-COMPLEX: " and says where the work came from.
+var ErrTooComplex = errors.New("opencrs: " + CodeTooComplex)
+
+// coreError is an error the module reported. Its text is the module's own.
+type coreError struct{ msg string }
+
+func (e *coreError) Error() string { return e.msg }
+
+// Unwrap makes a CRS-TOO-COMPLEX error match ErrTooComplex.
+func (e *coreError) Unwrap() error {
+	if strings.HasPrefix(e.msg, CodeTooComplex+": ") {
+		return ErrTooComplex
+	}
+	return nil
 }
 
 // decode unpacks a response into out, turning {"error": ...} into an error.
@@ -281,21 +360,30 @@ func decode(resp []byte, out any) error {
 		Error *string `json:"error"`
 	}
 	if json.Unmarshal(resp, &e) == nil && e.Error != nil {
-		return errors.New(*e.Error)
+		return &coreError{*e.Error}
 	}
 	return json.Unmarshal(resp, out)
 }
 
-func run(name string, req, out any) error {
-	return runWith(out, func(in *instance) ([]byte, error) { return in.call(name, req) })
+func run(ctx context.Context, name string, req, out any) error {
+	return runWith(ctx, out, func(in *instance) ([]byte, error) { return in.call(name, req) })
 }
 
 // runWith makes a fresh instance, makes the call on it and decodes the
 // response into out.
-func runWith(out any, call func(*instance) ([]byte, error)) error {
-	in, err := newInstance()
+func runWith(ctx context.Context, out any, call func(*instance) ([]byte, error)) error {
+	resp, err := runRaw(ctx, call)
 	if err != nil {
 		return err
+	}
+	return decode(resp, out)
+}
+
+// runRaw makes an instance, makes the call on it and returns the response.
+func runRaw(ctx context.Context, call func(*instance) ([]byte, error)) ([]byte, error) {
+	in, err := newInstance(ctx)
+	if err != nil {
+		return nil, err
 	}
 	defer in.close()
 	// Dirty until the call returns, so a panic out of it (a caller's reader,
@@ -303,32 +391,59 @@ func runWith(out any, call func(*instance) ([]byte, error)) error {
 	in.dirty = true
 	resp, err := call(in)
 	if err != nil {
-		return err
+		return nil, err
+	}
+	// The module stopped the call because its context ended. What it had
+	// made was dropped, and the instance is left clean, but close() won't
+	// pool it with its context ended.
+	if string(resp) == interruptedMsg {
+		in.dirty = false
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("opencrs: %w", err)
+		}
+		return nil, errors.New("opencrs: the module stopped the call")
 	}
 	in.dirty = false
-	return decode(resp, out)
+	return resp, nil
 }
 
 // Version returns the OpenCRS spec version the package implements. It
 // panics if the embedded module cannot be loaded.
 func Version() string {
-	var v struct {
-		Version string `json:"version"`
-	}
-	if err := run("opencrs_version", struct{}{}, &v); err != nil {
+	v, err := VersionContext(context.Background())
+	if err != nil {
 		// The module is embedded, so failing to load it is a broken build,
 		// not a condition to handle.
 		panic(err)
 	}
-	return v.Version
+	return v
+}
+
+// VersionContext is Version with a context. An error means the module could
+// not be loaded or ctx ended first.
+func VersionContext(ctx context.Context) (string, error) {
+	var v struct {
+		Version string `json:"version"`
+	}
+	if err := run(ctx, "opencrs_version", struct{}{}, &v); err != nil {
+		return "", err
+	}
+	return v.Version, nil
 }
 
 // Lint checks one document of any kind against its schema and, for a valid
 // screens document, its own references and rules. An error means the
 // document could not be read at all.
 func Lint(doc []byte) (*LintResult, error) {
+	return LintContext(context.Background(), doc)
+}
+
+// LintContext is Lint with a context. When ctx is cancelled or its deadline
+// passes, the call stops and returns an error wrapping ctx.Err(); use a
+// deadline when linting documents you don't trust.
+func LintContext(ctx context.Context, doc []byte) (*LintResult, error) {
 	var res LintResult
-	err := runWith(&res, func(in *instance) ([]byte, error) { return in.callRaw("opencrs_lint", doc) })
+	err := runWith(ctx, &res, func(in *instance) ([]byte, error) { return in.callRaw("opencrs_lint", doc) })
 	if err != nil {
 		return nil, err
 	}
@@ -342,11 +457,31 @@ const hashChunk = 1 << 20
 // type, dimensions and (for MP4) duration. Only the hash reads the whole
 // file; the rest touches the headers. r must hold exactly size bytes.
 func Probe(r io.ReaderAt, size int64) (*ProbeResult, error) {
-	h := sha256.New()
-	if _, err := io.CopyBuffer(h, io.NewSectionReader(r, 0, size), make([]byte, hashChunk)); err != nil {
-		return nil, err
+	return ProbeContext(context.Background(), r, size)
+}
+
+// ctxReader stops a copy once its context ends.
+type ctxReader struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func (c ctxReader) Read(p []byte) (int, error) {
+	if err := c.ctx.Err(); err != nil {
+		return 0, err
 	}
-	in, err := newInstance()
+	return c.r.Read(p)
+}
+
+// ProbeContext is Probe with a context, which also stops the hashing. When
+// ctx ends, the error wraps ctx.Err().
+func ProbeContext(ctx context.Context, r io.ReaderAt, size int64) (*ProbeResult, error) {
+	h := sha256.New()
+	src := ctxReader{ctx, io.NewSectionReader(r, 0, size)}
+	if _, err := io.CopyBuffer(h, src, make([]byte, hashChunk)); err != nil {
+		return nil, fmt.Errorf("opencrs: hashing: %w", err)
+	}
+	in, err := newInstance(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -390,6 +525,9 @@ func probeOn(in *instance, r io.ReaderAt, size int64, sum string) (*ProbeResult,
 			}
 			return st.Probe, nil
 		}
+		if err := in.ctx.Err(); err != nil {
+			return nil, fmt.Errorf("opencrs: %w", err)
+		}
 		n := min(st.Need.Len, size-st.Need.Offset)
 		if st.Need.Offset < 0 || n < 0 {
 			return nil, fmt.Errorf("opencrs: probe asked for bytes %d+%d of %d", st.Need.Offset, st.Need.Len, size)
@@ -408,7 +546,7 @@ func probeOn(in *instance, r io.ReaderAt, size int64, sum string) (*ProbeResult,
 		res, err := feed.Call(in.ctx, uint64(st.Session), uint64(ptr), uint64(len(buf)))
 		in.free(ptr, uint32(len(buf)))
 		if err != nil {
-			return nil, fmt.Errorf("opencrs: opencrs_probe_feed: %w", err)
+			return nil, wrapCtx(in.ctx, fmt.Errorf("opencrs: opencrs_probe_feed: %w", err))
 		}
 		if resp, err = in.take(res[0]); err != nil {
 			return nil, err
@@ -421,6 +559,11 @@ func probeOn(in *instance, r io.ReaderAt, size int64, sum string) (*ProbeResult,
 // with no probe is judged on the manifest's declared values. A zero now
 // means the current time.
 func Check(specs [][]byte, manifest []byte, probes map[string]*ProbeResult, now time.Time) (*CheckResult, error) {
+	return CheckContext(context.Background(), specs, manifest, probes, now)
+}
+
+// CheckContext is Check with a context; see LintContext.
+func CheckContext(ctx context.Context, specs [][]byte, manifest []byte, probes map[string]*ProbeResult, now time.Time) (*CheckResult, error) {
 	if probes == nil {
 		probes = map[string]*ProbeResult{}
 	}
@@ -432,7 +575,7 @@ func Check(specs [][]byte, manifest []byte, probes map[string]*ProbeResult, now 
 		"now":    now.Format(time.RFC3339),
 	}
 	var res CheckResult
-	err := runWith(&res, func(in *instance) ([]byte, error) {
+	err := runWith(ctx, &res, func(in *instance) ([]byte, error) {
 		return in.callDocs("opencrs_check", req, append([][]byte{manifest}, specs...)...)
 	})
 	if err != nil {
@@ -458,6 +601,12 @@ func Check(specs [][]byte, manifest []byte, probes map[string]*ProbeResult, now 
 // don't check a package extracted from an untrusted archive unless the
 // archive was unpacked without them.
 func CheckDir(fsys fs.FS, specs []string, manifest string, now time.Time) (*CheckResult, error) {
+	return CheckDirContext(context.Background(), fsys, specs, manifest, now)
+}
+
+// CheckDirContext is CheckDir with a context, which covers the hashing and
+// probing of every creative file as well as the check; see LintContext.
+func CheckDirContext(ctx context.Context, fsys fs.FS, specs []string, manifest string, now time.Time) (*CheckResult, error) {
 	var docs [][]byte
 	for _, name := range specs {
 		b, err := fs.ReadFile(fsys, name)
@@ -488,7 +637,7 @@ func CheckDir(fsys fs.FS, specs []string, manifest string, now time.Time) (*Chec
 		if !localName(f.File) {
 			return nil, fmt.Errorf("%s: file name %q is absolute or leaves the manifest's directory", manifest, f.File)
 		}
-		p, err := probeFS(fsys, path.Join(path.Dir(manifest), f.File))
+		p, err := probeFS(ctx, fsys, path.Join(path.Dir(manifest), f.File))
 		switch {
 		case err == nil:
 			probes[f.File] = p
@@ -498,7 +647,7 @@ func CheckDir(fsys fs.FS, specs []string, manifest string, now time.Time) (*Chec
 			return nil, fmt.Errorf("%s: %w", f.File, err)
 		}
 	}
-	res, err := Check(docs, raw, probes, now)
+	res, err := CheckContext(ctx, docs, raw, probes, now)
 	if err != nil {
 		return nil, err
 	}
@@ -572,7 +721,7 @@ func resolve(fsys fs.FS, name string) (string, error) {
 
 // probeFS probes one file in fsys. It checks that the file is a regular
 // one before opening it, so a FIFO or device can't block the open.
-func probeFS(fsys fs.FS, name string) (*ProbeResult, error) {
+func probeFS(ctx context.Context, fsys fs.FS, name string) (*ProbeResult, error) {
 	real, err := resolve(fsys, name)
 	if err != nil {
 		return nil, err
@@ -601,13 +750,13 @@ func probeFS(fsys fs.FS, name string) (*ProbeResult, error) {
 		return nil, fmt.Errorf("%s is not a regular file", name)
 	}
 	if ra, ok := f.(io.ReaderAt); ok {
-		return Probe(ra, st.Size())
+		return ProbeContext(ctx, ra, st.Size())
 	}
 	b, err := io.ReadAll(f) // files that can't seek are read whole
 	if err != nil {
 		return nil, err
 	}
-	return Probe(bytesReaderAt(b), int64(len(b)))
+	return ProbeContext(ctx, bytesReaderAt(b), int64(len(b)))
 }
 
 type bytesReaderAt []byte
@@ -627,6 +776,12 @@ func (b bytesReaderAt) ReadAt(p []byte, off int64) (int, error) {
 // "harbourline.example/retail/portrait-totem-75". A format gives one result
 // per screen using it.
 func Resolve(spec []byte, ref string) ([]Requirements, error) {
+	return ResolveContext(context.Background(), spec, ref)
+}
+
+// ResolveContext is Resolve with a context; see LintContext. A document that
+// asks for too much work gives an error wrapping ErrTooComplex.
+func ResolveContext(ctx context.Context, spec []byte, ref string) ([]Requirements, error) {
 	// The module answers with the distinct views and, for each screen, which
 	// view it has: a format of 190,000 screens in 500 kinds is a few
 	// megabytes that way rather than 70, and is put together here.
@@ -635,7 +790,7 @@ func Resolve(spec []byte, ref string) ([]Requirements, error) {
 		Group []int          `json:"group"`
 		ID    []*string      `json:"id"`
 	}
-	err := runWith(&res, func(in *instance) ([]byte, error) {
+	err := runWith(ctx, &res, func(in *instance) ([]byte, error) {
 		return in.callDocs("opencrs_resolve", map[string]any{"ref": ref, "grouped": true}, spec)
 	})
 	if err != nil {
@@ -667,22 +822,15 @@ func ResolveStrictest(spec []byte, ref string) (*StrictestRequirements, error) {
 	return ResolveStrictestContext(context.Background(), spec, ref)
 }
 
-// ResolveStrictestContext is ResolveStrictest with a context. The call does
-// not start if ctx has ended, and if ctx ends during it the result is
-// dropped and the error is ctx.Err(); the module is not interrupted part
-// way through.
+// ResolveStrictestContext is ResolveStrictest with a context; see
+// LintContext. A document that asks for too much work gives an error
+// wrapping ErrTooComplex.
 func ResolveStrictestContext(ctx context.Context, spec []byte, ref string) (*StrictestRequirements, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
 	var res StrictestRequirements
-	err := runWith(&res, func(in *instance) ([]byte, error) {
+	err := runWith(ctx, &res, func(in *instance) ([]byte, error) {
 		return in.callDocs("opencrs_resolve_strictest", map[string]any{"ref": ref}, spec)
 	})
 	if err != nil {
-		return nil, err
-	}
-	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	return &res, nil
