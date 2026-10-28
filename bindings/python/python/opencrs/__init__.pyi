@@ -21,7 +21,11 @@ class Check(TypedDict):
     message: str
     rect_px: NotRequired[list[int]]
     element: NotRequired[str]
+    network: NotRequired[str]
+    venue: NotRequired[str]
+    format: NotRequired[str]
     screens: NotRequired[list[str]]
+    screens_total: NotRequired[int]
     source: NotRequired[str]
 
 class LintResult(TypedDict):

@@ -6,16 +6,12 @@ use crate::schema::{Kind, SchemaOptions, validate_schema};
 
 /// Parses a screens.json, first checking it against the schema.
 pub fn decode_document(raw: &[u8]) -> Result<Document, Error> {
-    let mut d: Document = decode(Kind::Screens, raw)?;
-    d.source = String::from_utf8_lossy(raw).into();
-    Ok(d)
+    decode(Kind::Screens, raw)
 }
 
 /// Parses a creative.json, first checking it against the schema.
 pub fn decode_manifest(raw: &[u8]) -> Result<Manifest, Error> {
-    let mut m: Manifest = decode(Kind::Creative, raw)?;
-    m.source = String::from_utf8_lossy(raw).into();
-    Ok(m)
+    decode(Kind::Creative, raw)
 }
 
 pub(crate) fn decode<T: serde::de::DeserializeOwned>(kind: Kind, raw: &[u8]) -> Result<T, Error> {

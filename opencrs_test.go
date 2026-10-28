@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"testing/fstest"
@@ -386,5 +387,18 @@ func TestCheckDirListsMissingFiles(t *testing.T) {
 	}
 	if res.Missing != nil {
 		t.Errorf("Missing = %q, want none", res.Missing)
+	}
+}
+
+func TestOversizedRequestIsRefusedBeforeAllocating(t *testing.T) {
+	big := make([]byte, maxRequest) // untouched, so it costs no memory
+	if _, err := Lint(big); err == nil || !strings.Contains(err.Error(), "memory limit") {
+		t.Errorf("Lint of %d bytes: err = %v", len(big), err)
+	}
+	if _, err := Check([][]byte{big}, []byte("{}"), nil, time.Time{}); err == nil || !strings.Contains(err.Error(), "memory limit") {
+		t.Errorf("Check: err = %v", err)
+	}
+	if _, err := Resolve(big, "a.example/n/f"); err == nil || !strings.Contains(err.Error(), "memory limit") {
+		t.Errorf("Resolve: err = %v", err)
 	}
 }

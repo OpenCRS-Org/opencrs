@@ -141,6 +141,20 @@ impl Document {
     /// one result; a format reference gives one per screen using that
     /// format, or one format-only result if no screen uses it.
     pub fn resolve(&self, r: &Ref) -> Result<Vec<Requirements<'_>>, ResolveError> {
+        let mut out = Vec::new();
+        self.resolve_each(r, |q| out.push(q))?;
+        Ok(out)
+    }
+
+    /// [`resolve`](Self::resolve), handing each result to `each` as it is
+    /// worked out instead of collecting them, so a format with hundreds of
+    /// thousands of screens never has all its requirements at once. On an
+    /// error, `each` may already have seen the results before the fault.
+    pub fn resolve_each<'a>(
+        &'a self,
+        r: &Ref,
+        mut each: impl FnMut(Requirements<'a>),
+    ) -> Result<(), ResolveError> {
         if r.publisher != self.publisher {
             return Err(ResolveError::Other(format!(
                 "{r} belongs to {}, not {}",
@@ -162,7 +176,8 @@ impl Document {
                     quote(&n.id)
                 ))
             })?;
-            return Ok(vec![self.resolve_screen(n, s)?]);
+            each(self.resolve_screen(n, s)?);
+            return Ok(());
         }
         let f = n.format(&r.format).ok_or_else(|| {
             ResolveError::Other(format!(
@@ -171,14 +186,15 @@ impl Document {
                 quote(&n.id)
             ))
         })?;
-        let mut out = Vec::new();
+        let mut any = false;
         for s in n.screens.iter().filter(|s| s.format == f.id) {
-            out.push(self.resolve_screen(n, s)?);
+            each(self.resolve_screen(n, s)?);
+            any = true;
         }
-        if out.is_empty() {
-            out.push(self.build(n, f, None, None));
+        if !any {
+            each(self.build(n, f, None, None));
         }
-        Ok(out)
+        Ok(())
     }
 
     fn network(&self, id: &str) -> Option<&Network> {
@@ -210,6 +226,15 @@ impl Document {
             })?);
         }
         Ok(self.build(n, f, v, Some(s)))
+    }
+
+    /// The conflicts a venue's rules make with its network's, which hold for
+    /// every screen at the venue whatever its format.
+    pub(crate) fn venue_conflicts(&self, n: &Network, v: &Venue) -> Vec<String> {
+        let mut r = Rules::default();
+        r.merge_at(n.rules.as_ref(), &format!("network {}", n.id));
+        r.merge_at(v.rules.as_ref(), &format!("venue {}", v.id));
+        r.conflicts
     }
 
     pub(crate) fn build<'a>(
@@ -837,7 +862,16 @@ mod tests {
         let checks = check_document(&d);
         assert_eq!(checks.len(), 1, "{checks:?}");
         assert_eq!(checks[0].code, CODE_RULE_CONFLICT);
-        assert_eq!(checks[0].screens.len(), 3);
+        // Caused by the venue's rules, so it is the venue's: once, with no screens.
+        assert!(checks[0].screens.is_empty());
+        assert_eq!(
+            (
+                checks[0].network.as_str(),
+                checks[0].venue.as_str(),
+                checks[0].format.as_str()
+            ),
+            ("retail", "harbour-central", "")
+        );
         assert_eq!(
             checks[0].message,
             "venue harbour-central restates the legal (offer) element within [0 0 1080 300], which doesn't overlap the inherited [0 1600 1080 320]; no creative can comply"

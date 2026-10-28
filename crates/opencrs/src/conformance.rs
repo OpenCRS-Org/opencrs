@@ -65,6 +65,9 @@ pub struct ExpectedCheck {
     pub element: String,
     #[serde(default)]
     pub screens: Vec<String>,
+    /// How many screens a finding with a cut-short list applies to.
+    #[serde(default)]
+    pub screens_total: u64,
 }
 
 impl Case {
@@ -106,6 +109,8 @@ struct ActualCheck {
     #[serde(default)]
     screens: Option<Vec<String>>,
     #[serde(default)]
+    screens_total: Option<u64>,
+    #[serde(default)]
     message: Option<String>,
 }
 
@@ -121,6 +126,7 @@ struct Check {
     severity: String,
     element: String,
     screens: Vec<String>,
+    screens_total: u64,
     message: String,
 }
 
@@ -131,6 +137,7 @@ impl From<ActualCheck> for Check {
             severity: c.severity.unwrap_or_default(),
             element: c.element.unwrap_or_default(),
             screens: c.screens.unwrap_or_default(),
+            screens_total: c.screens_total.unwrap_or_default(),
             message: c.message.unwrap_or_default(),
         }
     }
@@ -209,6 +216,7 @@ pub fn compare(c: &Case, output: &[u8]) -> Vec<String> {
                     && g.severity == w.severity
                     && (w.element.is_empty() || g.element == w.element)
                     && same_set(&g.screens, &w.screens)
+                    && g.screens_total == w.screens_total
             });
             match found {
                 Some((j, _)) => used[j] = true,
@@ -279,6 +287,7 @@ mod tests {
                     severity: "error".into(),
                     element: "legal".into(),
                     screens: vec!["S2".into()],
+                    screens_total: 0,
                 }],
             }],
             ..Default::default()

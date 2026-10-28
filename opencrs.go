@@ -28,9 +28,13 @@ var wasmBytes []byte
 
 var errEOF = io.EOF
 
-// maxMemoryPages caps one instance at 128 MiB (64 KiB pages). Files are
-// read by range, never loaded, so this only bounds the documents.
-const maxMemoryPages = 2048
+// maxMemoryPages caps one instance at 256 MiB (64 KiB pages). Files are
+// read by range, never loaded, so this only bounds the documents. At the
+// spec's 50 MB limit (190,000 screens) the module peaks at about 55 MiB to
+// Lint and 146 MiB to Check; a Check whose target covers all of those
+// screens also writes a 73 MB answer and peaks at about 220 MiB. The cap
+// leaves room above that. TestLintAndCheckLargeDocument keeps it honest.
+const maxMemoryPages = 4096
 
 var (
 	once     sync.Once
@@ -81,8 +85,19 @@ func (in *instance) fn(name string) (api.Function, error) {
 	return f, nil
 }
 
+// maxRequest is the most a single request may carry. The module could never
+// hold more, and sizes are 32-bit in its ABI.
+const maxRequest = maxMemoryPages * 65536
+
+func errTooLarge(n int) error {
+	return fmt.Errorf("opencrs: a request of %d bytes is more than the module's %d-byte memory limit", n, maxRequest)
+}
+
 // put copies data into a new allocation in module memory.
 func (in *instance) put(data []byte) (ptr uint32, err error) {
+	if len(data) >= maxRequest {
+		return 0, errTooLarge(len(data))
+	}
 	alloc, err := in.fn("opencrs_alloc")
 	if err != nil {
 		return 0, err
@@ -138,6 +153,74 @@ func (in *instance) call(name string, req any) ([]byte, error) {
 	return in.take(r[0])
 }
 
+// callDocs runs an export that carries documents: a frame of a JSON header
+// (req plus the documents' lengths) and then the documents themselves as
+// raw bytes, written straight into module memory. The module takes the
+// allocation and frees it once the documents are decoded.
+func (in *instance) callDocs(name string, req map[string]any, docs ...[]byte) ([]byte, error) {
+	lens := make([]int, len(docs))
+	total := 4
+	for i, d := range docs {
+		lens[i] = len(d)
+		total += len(d)
+	}
+	req["blobs"] = lens
+	head, err := json.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+	total += len(head)
+	if total >= maxRequest {
+		return nil, errTooLarge(total)
+	}
+	f, err := in.fn(name)
+	if err != nil {
+		return nil, err
+	}
+	alloc, err := in.fn("opencrs_alloc")
+	if err != nil {
+		return nil, err
+	}
+	r, err := alloc.Call(in.ctx, uint64(total))
+	if err != nil {
+		return nil, err
+	}
+	ptr := uint32(r[0])
+	mem := in.mod.Memory()
+	ok := mem.WriteUint32Le(ptr, uint32(len(head))) && mem.Write(ptr+4, head)
+	at := ptr + 4 + uint32(len(head))
+	for _, d := range docs {
+		ok = ok && mem.Write(at, d)
+		at += uint32(len(d))
+	}
+	if !ok {
+		return nil, errors.New("opencrs: writing to module memory failed")
+	}
+	r, err = f.Call(in.ctx, uint64(ptr), uint64(total))
+	if err != nil {
+		return nil, fmt.Errorf("opencrs: %s: %w", name, err)
+	}
+	return in.take(r[0])
+}
+
+// callRaw runs an export whose request is raw bytes, such as a document.
+func (in *instance) callRaw(name string, data []byte) ([]byte, error) {
+	f, err := in.fn(name)
+	if err != nil {
+		return nil, err
+	}
+	ptr, err := in.put(data)
+	if err != nil {
+		return nil, err
+	}
+	defer in.free(ptr, uint32(len(data)))
+	r, err := f.Call(in.ctx, uint64(ptr), uint64(len(data)))
+	if err != nil {
+		return nil, fmt.Errorf("opencrs: %s: %w", name, err)
+	}
+	return in.take(r[0])
+}
+
 // decode unpacks a response into out, turning {"error": ...} into an error.
 func decode(resp []byte, out any) error {
 	var e struct {
@@ -150,12 +233,18 @@ func decode(resp []byte, out any) error {
 }
 
 func run(name string, req, out any) error {
+	return runWith(out, func(in *instance) ([]byte, error) { return in.call(name, req) })
+}
+
+// runWith makes a fresh instance, makes the call on it and decodes the
+// response into out.
+func runWith(out any, call func(*instance) ([]byte, error)) error {
 	in, err := newInstance()
 	if err != nil {
 		return err
 	}
 	defer in.close()
-	resp, err := in.call(name, req)
+	resp, err := call(in)
 	if err != nil {
 		return err
 	}
@@ -181,7 +270,8 @@ func Version() string {
 // document could not be read at all.
 func Lint(doc []byte) (*LintResult, error) {
 	var res LintResult
-	if err := run("opencrs_lint", map[string]string{"text": string(doc)}, &res); err != nil {
+	err := runWith(&res, func(in *instance) ([]byte, error) { return in.callRaw("opencrs_lint", doc) })
+	if err != nil {
 		return nil, err
 	}
 	return &res, nil
@@ -266,10 +356,6 @@ func probeOn(in *instance, r io.ReaderAt, size int64, sum string) (*ProbeResult,
 // with no probe is judged on the manifest's declared values. A zero now
 // means the current time.
 func Check(specs [][]byte, manifest []byte, probes map[string]*ProbeResult, now time.Time) (*CheckResult, error) {
-	texts := make([]string, len(specs))
-	for i, s := range specs {
-		texts[i] = string(s)
-	}
 	if probes == nil {
 		probes = map[string]*ProbeResult{}
 	}
@@ -277,13 +363,14 @@ func Check(specs [][]byte, manifest []byte, probes map[string]*ProbeResult, now 
 		now = time.Now()
 	}
 	req := map[string]any{
-		"specs":    texts,
-		"manifest": string(manifest),
-		"probes":   probes,
-		"now":      now.Format(time.RFC3339),
+		"probes": probes,
+		"now":    now.Format(time.RFC3339),
 	}
 	var res CheckResult
-	if err := run("opencrs_check", req, &res); err != nil {
+	err := runWith(&res, func(in *instance) ([]byte, error) {
+		return in.callDocs("opencrs_check", req, append([][]byte{manifest}, specs...)...)
+	})
+	if err != nil {
 		return nil, err
 	}
 	if res.Reports == nil {
@@ -476,7 +563,10 @@ func (b bytesReaderAt) ReadAt(p []byte, off int64) (int, error) {
 // per screen using it.
 func Resolve(spec []byte, ref string) ([]Requirements, error) {
 	var res []Requirements
-	if err := run("opencrs_resolve", map[string]string{"spec": string(spec), "ref": ref}, &res); err != nil {
+	err := runWith(&res, func(in *instance) ([]byte, error) {
+		return in.callDocs("opencrs_resolve", map[string]any{"ref": ref}, spec)
+	})
+	if err != nil {
 		return nil, err
 	}
 	return res, nil

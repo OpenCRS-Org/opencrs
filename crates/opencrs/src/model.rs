@@ -4,7 +4,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
-use std::sync::Arc;
 
 pub(crate) fn is_false(b: &bool) -> bool {
     !*b
@@ -29,9 +28,6 @@ pub struct Document {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub expires_at: String,
     pub networks: Vec<Network>,
-    /// The text this document was decoded from.
-    #[serde(skip)]
-    pub source: Arc<str>,
 }
 
 /// A set of screens sold or managed together.
@@ -184,10 +180,73 @@ pub struct Screen {
     pub overrides: Option<Box<Overrides>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rules: Option<Box<RuleSet>>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub platform_ids: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "PlatformIds::is_empty")]
+    pub platform_ids: PlatformIds,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub location: Option<Location>,
+}
+
+/// A screen's id on each playback platform, by platform. Kept as a sorted
+/// list: a network lists hundreds of thousands of screens, and a one-entry
+/// `BTreeMap` costs each of them a node of several hundred bytes. Reads and
+/// writes as a JSON object, as a map would (a repeated key keeps the last).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PlatformIds(Vec<(String, String)>);
+
+impl PlatformIds {
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn get(&self, platform: &str) -> Option<&str> {
+        let i = self
+            .0
+            .binary_search_by(|(k, _)| k.as_str().cmp(platform))
+            .ok()?;
+        Some(&self.0[i].1)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.0.iter().map(|(k, v)| (k.as_str(), v.as_str()))
+    }
+}
+
+impl Serialize for PlatformIds {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_map(self.iter())
+    }
+}
+
+impl<'de> Deserialize<'de> for PlatformIds {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct V;
+        impl<'de> serde::de::Visitor<'de> for V {
+            type Value = PlatformIds;
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str("a map of platform names to ids")
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut m: A,
+            ) -> Result<Self::Value, A::Error> {
+                let mut v: Vec<(String, String)> = Vec::new();
+                while let Some(kv) = m.next_entry()? {
+                    v.push(kv);
+                }
+                // Stable, so of repeated keys the last stays last.
+                v.sort_by(|a, b| a.0.cmp(&b.0));
+                let mut out: Vec<(String, String)> = Vec::with_capacity(v.len());
+                for kv in v {
+                    match out.last_mut() {
+                        Some(last) if last.0 == kv.0 => *last = kv,
+                        _ => out.push(kv),
+                    }
+                }
+                Ok(PlatformIds(out))
+            }
+        }
+        d.deserialize_map(V)
+    }
 }
 
 /// A screen's coordinates.
@@ -345,9 +404,6 @@ pub struct Manifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub campaign: Option<Campaign>,
     pub files: Vec<CreativeFile>,
-    /// The text this manifest was decoded from.
-    #[serde(skip)]
-    pub source: Arc<str>,
 }
 
 /// The advertiser and what the creative contains.
@@ -461,5 +517,22 @@ mod tests {
             json::to_string(&o),
             r#"{"pixels":[1,2],"remove":{"blocked_regions":["a"]}}"#
         );
+    }
+
+    #[test]
+    fn platform_ids_read_and_write_like_a_map() {
+        let s: Screen = serde_json::from_str(
+            r#"{"id":"a","format":"f","platform_ids":{"z":"1","cms-a":"2","z":"3"}}"#,
+        )
+        .unwrap();
+        assert_eq!(s.platform_ids.get("z"), Some("3"));
+        assert_eq!(s.platform_ids.get("cms-a"), Some("2"));
+        assert_eq!(s.platform_ids.get("x"), None);
+        assert_eq!(
+            json::to_string(&s),
+            r#"{"id":"a","format":"f","platform_ids":{"cms-a":"2","z":"3"}}"#
+        );
+        let bare: Screen = serde_json::from_str(r#"{"id":"a","format":"f"}"#).unwrap();
+        assert_eq!(json::to_string(&bare), r#"{"id":"a","format":"f"}"#);
     }
 }

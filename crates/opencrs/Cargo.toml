@@ -18,7 +18,7 @@ parallel = ["dep:rayon"]
 
 [dependencies]
 serde = { version = "1", features = ["derive", "rc"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["raw_value"] }
 jsonschema = { version = "0.60", default-features = false }
 unicode-general-category = "1"
 sha2 = "0.10"

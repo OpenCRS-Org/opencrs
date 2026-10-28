@@ -17,7 +17,14 @@ export interface Check {
   message: string;
   rect_px?: [number, number, number, number];
   element?: string;
+  /** Where in a screens.json a finding is caused: reported once, with no `screens`. */
+  network?: string;
+  venue?: string;
+  format?: string;
+  /** At most 1,000 screen ids, in document order. */
   screens?: string[];
+  /** How many screens the finding applies to, set when `screens` is cut short. */
+  screens_total?: number;
   source?: string;
 }
 

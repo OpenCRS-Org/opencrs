@@ -405,7 +405,7 @@ v = \frac{\text{speed}_{\text{km/h}}}{3.6} \qquad t = \min\left(2,\ \frac{d_{\te
 
 - **Precedence:** any `error` gives `fail`; otherwise any `not_checked` gives `incomplete`; otherwise any `warning` gives `warn`; otherwise `pass`. `info` never changes the result. Reports list findings only, not checks that passed.
 - **A rule that doesn't apply isn't "not checked".** If a screen has no legibility rule, legibility is skipped. `not_checked` means a rule exists but the creative or screen lacks the data to test it. Otherwise every Core-level publisher's reports would come back `incomplete`.
-- **One report per file and target.** A format target is checked against every screen using that format, because text size and word limits depend on each screen's viewing distance and dwell. A finding that applies to only some screens lists them under `screens`. Checks can also carry `element` (the role concerned) and `source` (`file` or `manifest`); reports can carry `file` and `checked_at`.
+- **One report per file and target.** A format target is checked against every screen using that format, because text size and word limits depend on each screen's viewing distance and dwell. A finding that applies to only some screens lists them under `screens`, in document order, up to 1,000; if there are more, `screens_total` gives how many. Checks can also carry `element` (the role concerned) and `source` (`file` or `manifest`); reports can carry `file` and `checked_at`.
 - **Little margin:** text that passes but is below 1.25 times its minimum size is a `warning`.
 - **Duration** must match `slot_s` within one frame (`1 / fps`, or 0.04 s when no frame rate is given). Too short and too long are both errors.
 - **Flash rate** can't be checked without frame analysis. Unless the manifest declares `max_flash_hz`, the check is `not_checked`. `no_flashing` means a limit of 0 Hz.
@@ -429,7 +429,7 @@ v = \frac{\text{speed}_{\text{km/h}}}{3.6} \qquad t = \min\left(2,\ \frac{d_{\te
 | `CRS-SPEC-STALE` | The spec used was current, not expired |
 | `CRS-MANIFEST-MISMATCH` | The file matches what the manifest declares |
 | `CRS-TARGET` | The target's network, format or screen exists in the document |
-| `CRS-RULE-PACK` | Reported `not_checked` when a referenced rule pack couldn't be evaluated, and `info` when a pack is `unverified`. A `warning` against the `screens.json` itself when it names a pack the validator doesn't know |
+| `CRS-RULE-PACK` | Reported `not_checked` when a referenced rule pack couldn't be evaluated, and `info` when a pack is `unverified`. A `warning` against the `screens.json` itself when it names a pack the validator doesn't know. Reported once where the pack is named (see below), not once for every screen that inherits it |
 | `CRS-MOTION-PROHIBITED` | A rule pack disallows motion on this screen, and the file is motion |
 | `CRS-TRAFFIC-DEVICE` | Nothing resembles a traffic sign or signal. Needs a person: `not_checked` unless the manifest attests to a review of this file, then `info` |
 | `CRS-GLANCE-TEXT` | Word count and text size are within what a driver can read in one glance, from speed and viewing distance |
@@ -439,7 +439,8 @@ v = \frac{\text{speed}_{\text{km/h}}}{3.6} \qquad t = \min\left(2,\ \frac{d_{\te
 | `CRS-ATTESTATION` | An attestation was ignored, because the validator makes that check itself. Always `info` |
 | `CRS-REFERENCE` | Every screen's format and venue exist. Reported against the `screens.json` itself, and in reports for creative targeting an affected screen |
 
-## Privacy, visibility and trust
+**Findings about the `screens.json` itself.** A finding is reported where it is caused, once, not once for every screen that inherits it. A rule pack named in a network's, venue's or format's own rules, and a `CRS-RULE-CONFLICT` that a venue's or format's rules make with the network's, carry `network` (the network's id) and, when it is about one, `venue` or `format`, and list no `screens`. A finding that arises from a screen itself (its own `rules` or `overrides`, a broken reference, or a conflict between a venue and a format's rules at that screen) lists the screens it affects. No finding lists more than 1,000 screens: it lists the first 1,000 in document order and gives the full count in `screens_total`.
+
 
 **Publishers decide what's public. Formats and rules are meant to be public; exact locations and commercial details can stay private.**
 

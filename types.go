@@ -43,13 +43,22 @@ func (e SchemaError) String() string {
 // Finding is one check result in a report (the brief calls it Check, which
 // would clash with the Check function).
 type Finding struct {
-	Code     string   `json:"code"`
-	Severity string   `json:"severity"` // error, warning, info or not_checked
-	Message  string   `json:"message"`
-	RectPX   *[4]int  `json:"rect_px,omitempty"`
-	Element  string   `json:"element,omitempty"`
-	Screens  []string `json:"screens,omitempty"`
-	Source   string   `json:"source,omitempty"`
+	Code     string  `json:"code"`
+	Severity string  `json:"severity"` // error, warning, info or not_checked
+	Message  string  `json:"message"`
+	RectPX   *[4]int `json:"rect_px,omitempty"`
+	Element  string  `json:"element,omitempty"`
+	// Network, Venue and Format say where in a screens.json a finding is
+	// caused (Network always, with a Venue or a Format when it is about one).
+	// Such a finding is reported once and lists no Screens.
+	Network string `json:"network,omitempty"`
+	Venue   string `json:"venue,omitempty"`
+	Format  string `json:"format,omitempty"`
+	// Screens lists at most 1,000 screen ids, in document order. When the
+	// finding applies to more, ScreensTotal says how many.
+	Screens      []string `json:"screens,omitempty"`
+	ScreensTotal int      `json:"screens_total,omitempty"`
+	Source       string   `json:"source,omitempty"`
 	// Attestation is set on a check only a person can judge, such as
 	// CRS-TRAFFIC-DEVICE, when the manifest attests to it for this file.
 	Attestation *Attestation `json:"attestation,omitempty"`

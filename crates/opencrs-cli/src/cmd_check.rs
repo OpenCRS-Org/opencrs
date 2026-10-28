@@ -139,7 +139,7 @@ pub fn run(a: &CheckArgs, stdout: &mut dyn Write, stderr: &mut dyn Write) -> i32
                 c.message
             );
             if !c.screens.is_empty() {
-                let _ = write!(stdout, "  [{}]", c.screens.join(", "));
+                let _ = write!(stdout, "  [{}]", c.screens_label());
             }
             let _ = writeln!(stdout);
         }

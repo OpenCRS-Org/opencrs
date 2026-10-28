@@ -36,10 +36,19 @@
           "message": { "type": "string" },
           "rect_px": { "$ref": "common.schema.json#/$defs/rect_px" },
           "element": { "type": "string", "description": "Role of the element concerned." },
+          "network": { "$ref": "common.schema.json#/$defs/id", "description": "For a finding about a screens.json caused at one level of it: the network. Such a finding is reported once and lists no screens." },
+          "venue": { "$ref": "common.schema.json#/$defs/id", "description": "With network: the venue the finding is about." },
+          "format": { "$ref": "common.schema.json#/$defs/id", "description": "With network: the format the finding is about." },
           "screens": {
             "type": "array",
             "items": { "type": "string" },
-            "description": "Screen ids the finding applies to, when it doesn't apply to every screen of the target."
+            "maxItems": 1000,
+            "description": "Screen ids the finding applies to, in document order, when it doesn't apply to every screen of the target. At most 1,000; screens_total says how many there are when the list is cut short."
+          },
+          "screens_total": {
+            "type": "integer",
+            "minimum": 1001,
+            "description": "How many screens the finding applies to. Present only when screens is cut short."
           },
           "source": { "enum": ["file", "manifest"], "description": "Where the measured value came from." },
           "attestation": {
