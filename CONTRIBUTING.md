@@ -75,3 +75,17 @@ Pushing a version tag runs `.github/workflows/release.yml`, which cargo-dist gen
 - An npm Trusted Publisher configured for `@opencrs/cli`: repository `OpenCRS-Org/opencrs`, workflow `release.yml`. npm is published by OIDC with provenance; there is no npm token.
 
 The container image goes to GHCR with the workflow's own `GITHUB_TOKEN`.
+
+### Language bindings
+
+The same tag publishes the Node.js binding (`@opencrs/opencrs` on npm) and the Python binding (`opencrs` on PyPI) through `.github/workflows/bindings-publish.yml`. It runs after Release succeeds, builds and tests both bindings on all seven targets (`bindings.yml`), and publishes only if every one passes. To retry a release, run it by hand with the tag. Prereleases go under the npm `next` tag.
+
+The bindings take the release's version, kept in the files: the release commit bumps `version` in `bindings/npm/package.json`, `bindings/npm/package-lock.json`, `bindings/npm/Cargo.toml`, `bindings/python/Cargo.toml` and `bindings/python/pyproject.toml` (with `Cargo.lock` and `bindings/python/uv.lock`) to match the CLI's. The workflow fails before building if any of them differs from the tag.
+
+One-time setup, before the first release that includes the bindings:
+
+- npmjs.com: on `@opencrs/opencrs`, add a Trusted Publisher: repository `OpenCRS-Org/opencrs`, workflow `bindings-publish.yml`, no environment.
+- PyPI: on the `opencrs` project, add a Trusted Publisher: repository `OpenCRS-Org/opencrs`, workflow `bindings-publish.yml`, environment `pypi`.
+- GitHub: create an environment named `pypi` (Settings, Environments).
+
+Neither registry uses a token.
