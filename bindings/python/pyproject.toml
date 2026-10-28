@@ -4,13 +4,13 @@ build-backend = "maturin"
 
 [project]
 name = "opencrs"
-version = "0.0.0"
+version = "0.1.1"
 description = "Python bindings for OpenCRS, the Open Creative Requirements Specification"
 readme = "README.md"
 requires-python = ">=3.9"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
-classifiers = ["Development Status :: 1 - Planning"]
+classifiers = ["Development Status :: 3 - Alpha"]
 
 [project.urls]
 Homepage = "https://opencrs.dev"

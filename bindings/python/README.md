@@ -4,7 +4,17 @@ Python bindings for the OpenCRS core (Rust, via PyO3): lint documents, probe
 creative files, and resolve screen requirements. OpenCRS is the Open Creative
 Requirements Specification: https://opencrs.dev
 
-Early work: version 0.0.0 and not yet published.
+Early work: the API may change before 1.0.
+
+## Install
+
+```sh
+pip install opencrs
+```
+
+Prebuilt wheels for macOS (arm64, x86-64), Linux (glibc and musl, arm64 and
+x86-64) and Windows (x86-64), for Python 3.9 or later. Documentation:
+https://opencrs.dev
 
 ```python
 import opencrs
@@ -20,6 +30,8 @@ opencrs.probe("creative.png")  # {"sha256": ..., "bytes": ..., "media_type": ...
 Errors from the core raise `opencrs.OpenCRSError`, a `ValueError`.
 
 ## Develop
+
+From a clone of https://github.com/OpenCRS-Org/opencrs, in `bindings/python`:
 
 ```sh
 uv run --with maturin maturin develop

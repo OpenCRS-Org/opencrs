@@ -4,7 +4,17 @@ Node.js bindings for the OpenCRS core (Rust, via napi-rs): lint documents,
 probe creative files, and resolve screen requirements. OpenCRS is the Open
 Creative Requirements Specification: https://opencrs.dev
 
-Early work: version 0.0.0 and not yet published.
+Early work: the API may change before 1.0.
+
+## Install
+
+```sh
+npm install @opencrs/opencrs
+```
+
+One package carries prebuilt binaries for macOS (arm64, x64), Linux (glibc and
+musl, arm64 and x64) and Windows (x64). Node 18 or later. Documentation:
+https://opencrs.dev
 
 ```js
 const opencrs = require("@opencrs/opencrs");
@@ -20,6 +30,8 @@ opencrs.probe("creative.png"); // { sha256, bytes, media_type, pixels? }
 Errors from the core are thrown as `Error` with the core's message.
 
 ## Develop
+
+From a clone of https://github.com/OpenCRS-Org/opencrs, in `bindings/npm`:
 
 ```sh
 npm install
