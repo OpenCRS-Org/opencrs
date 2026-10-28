@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "opencrs"
-version = "0.1.1"
+version = "0.1.2"
 description = "Python bindings for OpenCRS, the Open Creative Requirements Specification"
 readme = "README.md"
 requires-python = ">=3.9"
