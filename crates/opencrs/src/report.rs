@@ -7,7 +7,7 @@ use crate::checks::{Checker, Facts, gather_facts};
 use crate::error::Error;
 use crate::model::{Campaign, CreativeFile, Document};
 use crate::probe::Probe;
-use crate::resolve::{Requirements, ResolveError, parse_ref};
+use crate::resolve::{Ref, Requirements, ResolveError, parse_ref};
 use crate::rulepack::{RulePacks, builtin_rule_packs};
 use chrono::{DateTime, FixedOffset, SecondsFormat};
 use serde::{Deserialize, Serialize};
@@ -162,6 +162,117 @@ fn validate_within(
     target: &str,
     opt: &Options,
 ) -> Result<Report, ValidateError> {
+    validate_with(doc, input, target, opt, None)
+}
+
+/// A target expanded once: the screens it covers, grouped by their
+/// requirements (apart from their id), with one requirements for each group
+/// and the screens of each in document order. Every file checked against
+/// the target is checked once per group and reads the screen lists off the
+/// expansion, so a campaign of many files on a format of many screens costs
+/// by its files times the kinds of screen, not times the screens.
+pub struct Expansion<'a> {
+    /// One group's requirements, in order of the groups' first screens.
+    reps: Vec<Requirements<'a>>,
+    /// For each group, the positions (in `ids`) of its screens, in order.
+    members: Vec<Vec<u32>>,
+    ids: Arc<Vec<String>>,
+    repeats: bool,
+    /// Every screen the target covers, counting those with no id.
+    screens: usize,
+    /// Why the target didn't resolve, if it didn't.
+    error: Option<ResolveError>,
+}
+
+impl<'a> Expansion<'a> {
+    /// Resolves and groups the screens `r` covers in `doc`. The work is
+    /// counted against the budget once, here.
+    pub fn new(doc: &'a Document, r: &Ref) -> Self {
+        let mut reps: Vec<Requirements<'a>> = Vec::new();
+        let mut members: Vec<Vec<u32>> = Vec::new();
+        let mut seen: HashMap<Vec<u8>, usize> = HashMap::new();
+        let mut key = Vec::new();
+        let mut table = ScreenTable::default();
+        let mut screens = 0usize;
+        let resolved = doc.resolve_each(r, |req| {
+            crate::budget::charge_flat(4);
+            screens += 1;
+            let pos = table.begin(req.screen_id());
+            key.clear();
+            let keyed = req.key(&mut key);
+            let g = match seen.get(key.as_slice()) {
+                Some(&g) if keyed => g,
+                _ => {
+                    if keyed {
+                        seen.insert(key.clone(), reps.len());
+                    }
+                    members.push(Vec::new());
+                    reps.push(req);
+                    reps.len() - 1
+                }
+            };
+            // A screen with no id can't be listed, but still counts.
+            if !table_id_empty(&table, pos) {
+                members[g].push(pos);
+            }
+        });
+        let (ids, repeats) = table.into_ids();
+        Expansion {
+            reps,
+            members,
+            ids: Arc::new(ids),
+            repeats,
+            screens,
+            error: resolved.err(),
+        }
+    }
+}
+
+#[cfg(test)]
+impl<'a> Expansion<'a> {
+    /// An expansion with a group for every screen, for checking that
+    /// grouping changes nothing.
+    fn ungrouped(doc: &'a Document, r: &Ref) -> Self {
+        let mut reps = Vec::new();
+        let mut members = Vec::new();
+        let mut table = ScreenTable::default();
+        let mut screens = 0usize;
+        let resolved = doc.resolve_each(r, |req| {
+            screens += 1;
+            let pos = table.begin(req.screen_id());
+            members.push(if req.screen_id().is_empty() {
+                Vec::new()
+            } else {
+                vec![pos]
+            });
+            reps.push(req);
+        });
+        let (ids, repeats) = table.into_ids();
+        Expansion {
+            reps,
+            members,
+            ids: Arc::new(ids),
+            repeats,
+            screens,
+            error: resolved.err(),
+        }
+    }
+}
+
+fn table_id_empty(table: &ScreenTable, pos: u32) -> bool {
+    table.id(pos).is_empty()
+}
+
+/// [`validate`] with the target's expansion already made (by
+/// [`check_manifest_each`](crate::batch::check_manifest_each), which shares
+/// one between the files that target it), or made here if not.
+pub(crate) fn validate_with(
+    doc: &Document,
+    input: &Input,
+    target: &str,
+    opt: &Options,
+    expansion: Option<&Expansion>,
+) -> Result<Report, ValidateError> {
     let r = parse_ref(target).map_err(|e| ValidateError::BadTarget(e.to_string()))?;
     if r.publisher != doc.publisher {
         return Err(ValidateError::OtherPublisher(target.to_string()));
@@ -171,30 +282,16 @@ fn validate_within(
     let sha256 = facts.sha256.clone();
     checks.extend(stale_check(doc, &opt.now));
 
-    // Screens with the same requirements (apart from their id) are checked
-    // once, and each screen's findings are merged as the screens come, so a
-    // target of hundreds of thousands of screens costs by what is different
-    // between them, not by how many there are.
-    let mut merger = Merger::default();
-    let mut seen: HashMap<Vec<u8>, usize> = HashMap::new();
-    let mut key = Vec::new();
-    let resolved = doc.resolve_each(&r, |req| {
-        key.clear();
-        let keyed = req.key(&mut key);
-        let group = match seen.get(key.as_slice()) {
-            Some(&g) if keyed => g,
-            _ => {
-                let g = merger.new_group(run_checks(&req, input, &facts, opt));
-                if keyed {
-                    seen.insert(key.clone(), g);
-                }
-                g
-            }
-        };
-        merger.add(group, req.screen_id());
-    });
-    match resolved {
-        Err(e) => {
+    let own;
+    let exp = match expansion {
+        Some(e) => e,
+        None => {
+            own = Expansion::new(doc, &r);
+            &own
+        }
+    };
+    match &exp.error {
+        Some(e) => {
             let (code, severity) = match e {
                 ResolveError::Reference(_) => (CODE_REFERENCE, Severity::Error),
                 ResolveError::Other(_) => (CODE_TARGET, Severity::Error),
@@ -202,8 +299,14 @@ fn validate_within(
             };
             checks.push(Check::new(code, severity, e.to_string()));
         }
-        Ok(()) => {
-            checks.extend(merger.finish());
+        None => {
+            // Each kind of screen is checked once, and the findings of all
+            // of them merged, each keeping the groups it is in.
+            let mut merger = Merger::default();
+            for (g, rep) in exp.reps.iter().enumerate() {
+                merger.enter(g, run_checks(rep, input, &facts, opt));
+            }
+            checks.extend(merger.finish(exp));
             // The work ran out while merging what was found.
             if let Some(why) = crate::budget::explain(Some(doc)) {
                 checks.push(Check::too_complex(why));
@@ -283,49 +386,22 @@ fn stale_check(doc: &Document, now: &DateTime<FixedOffset>) -> Vec<Check> {
 /// target lists none.
 ///
 /// Screens come in groups with the same findings, which are worked out once
-/// (`new_group`); a screen is then added to its group (`add`) at the cost of
-/// remembering its position. Each finding keeps the groups it is in, and the
-/// screens it lists are read off those groups at the end, so a finding on
-/// every screen of a large target never holds a list of them.
+/// and entered in the order of the groups' first screens. Each finding keeps
+/// the groups it is in, and the screens it lists are read off the target's
+/// expansion at the end, so a finding on every screen of a large target
+/// never holds a list of them.
 #[derive(Default)]
 struct Merger {
     index: HashMap<MergeKey, usize>,
     out: Vec<Check>,
     /// For each finding, the groups it is in.
     groups_of: Vec<Vec<u32>>,
-    /// For each group, its checks, until a screen of it is first added.
-    pending: Vec<Option<Vec<Check>>>,
-    /// For each group, the positions of its screens, in order.
-    members: Vec<Vec<u32>>,
-    table: ScreenTable,
-    screens: usize,
 }
 
 type MergeKey = (String, String, String, String, Severity, Option<[i64; 4]>);
 
 impl Merger {
-    /// Starts a group whose screens all have `checks`.
-    fn new_group(&mut self, checks: Vec<Check>) -> usize {
-        self.pending.push(Some(checks));
-        self.members.push(Vec::new());
-        self.pending.len() - 1
-    }
-
-    fn add(&mut self, group: usize, id: &str) {
-        crate::budget::charge_flat(4);
-        self.screens += 1;
-        let pos = self.table.begin(id);
-        if let Some(checks) = self.pending[group].take() {
-            self.enter(group, checks);
-        }
-        // A screen with no id can't be listed, but still counts as a screen.
-        if !id.is_empty() {
-            self.members[group].push(pos);
-        }
-    }
-
-    /// Merges a group's checks into the findings, the first time a screen of
-    /// it arrives, which is when the findings are first seen.
+    /// Merges a group's checks into the findings.
     fn enter(&mut self, group: usize, checks: Vec<Check>) {
         // Each finding of the group is noted against it...
         crate::budget::charge(crate::budget::Work::Findings, 0, checks.len() as u64 * 8);
@@ -360,27 +436,20 @@ impl Merger {
         }
     }
 
-    fn finish(self) -> Vec<Check> {
+    fn finish(self, exp: &Expansion) -> Vec<Check> {
         let Merger {
-            mut out,
-            groups_of,
-            members,
-            table,
-            screens,
-            ..
+            mut out, groups_of, ..
         } = self;
-        let (ids, repeats) = table.into_ids();
-        let ids = Arc::new(ids);
         // Findings in the same groups list the same screens.
         let mut lists: HashMap<Vec<u32>, (ScreenList, usize)> = HashMap::new();
         for (c, mut groups) in out.iter_mut().zip(groups_of) {
             groups.sort_unstable();
             let (list, total) = lists
                 .entry(groups)
-                .or_insert_with_key(|g| screens_in(g, &members, &ids, repeats))
+                .or_insert_with_key(|g| screens_in(g, &exp.members, &exp.ids, exp.repeats))
                 .clone();
             // A finding on every screen of the target lists none.
-            if total == screens {
+            if total == exp.screens {
                 continue;
             }
             c.screens_total = (total > list.len()).then_some(total as u64);
@@ -531,13 +600,12 @@ mod tests {
         // The same, a group for every screen.
         let r = parse_ref(&target).unwrap();
         let (facts, _) = gather_facts(input.file, input.probe);
+        let exp = Expansion::ungrouped(&d, &r);
         let mut m = Merger::default();
-        d.resolve_each(&r, |req| {
-            let g = m.new_group(run_checks(&req, &input, &facts, &opt));
-            m.add(g, req.screen_id());
-        })
-        .unwrap();
-        let each = m.finish();
+        for (g, rep) in exp.reps.iter().enumerate() {
+            m.enter(g, run_checks(rep, &input, &facts, &opt));
+        }
+        let each = m.finish(&exp);
         assert!(!each.is_empty());
         let got: Vec<_> = grouped
             .checks
@@ -617,12 +685,18 @@ mod tests {
     #[test]
     fn merging_lists_each_screen_once_and_drops_a_full_list() {
         let finding = |m: &str| vec![Check::new("CRS-X", Severity::Error, m)];
+        let exp = Expansion {
+            reps: Vec::new(),
+            members: vec![vec![0], vec![1]],
+            ids: Arc::new(vec!["a".into(), "b".into()]),
+            repeats: false,
+            screens: 2,
+            error: None,
+        };
         let mut m = Merger::default();
-        let g1 = m.new_group([finding("all"), finding("some")].concat());
-        let g2 = m.new_group([finding("all"), finding("all")].concat());
-        m.add(g1, "a");
-        m.add(g2, "b");
-        let out = m.finish();
+        m.enter(0, [finding("all"), finding("some")].concat());
+        m.enter(1, [finding("all"), finding("all")].concat());
+        let out = m.finish(&exp);
         assert_eq!(out.len(), 2);
         // "all" is on both screens, so it lists none; "some" lists its one.
         assert!(out[0].screens.is_empty(), "{:?}", out[0].screens);

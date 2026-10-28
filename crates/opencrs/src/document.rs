@@ -376,7 +376,7 @@ impl<'de> Deserialize<'de> for LintScreen {
 }
 
 /// An object's members, in order, with each value left as the text it was.
-struct Members<'a>(Vec<(String, &'a RawValue)>);
+pub(crate) struct Members<'a>(Vec<(String, &'a RawValue)>);
 
 impl<'de> Deserialize<'de> for Members<'de> {
     fn deserialize<D: Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
@@ -402,7 +402,7 @@ impl<'a> Members<'a> {
     /// The text of the object with member `name` left out and, if `put` is
     /// given, `name: put` added; None if `name` is there twice, which the
     /// typed model refuses.
-    fn without(&self, name: &str, put: &str) -> Option<(String, Option<&'a RawValue>)> {
+    pub(crate) fn without(&self, name: &str, put: &str) -> Option<(String, Option<&'a RawValue>)> {
         let mut text = String::from("{");
         let mut found = None;
         for (k, v) in &self.0 {
@@ -456,7 +456,10 @@ pub fn check_document_text(raw: &str) -> Option<Vec<Check>> {
             check_screen(&d, n, &s, &mut scoped, &mut cache, &mut f);
             true
         };
-        let read = serde::de::DeserializeSeed::deserialize(ScreenStream(&mut each), &mut de);
+        let read = serde::de::DeserializeSeed::deserialize(
+            ScreenStream::<LintScreen>::new(&mut each),
+            &mut de,
+        );
         if !stopped {
             read.ok()?;
             de.end().ok()?;
@@ -468,16 +471,16 @@ pub fn check_document_text(raw: &str) -> Option<Vec<Check>> {
 
 /// A document's members except `networks`, each left as its text, and its
 /// networks each as their members, so the text is read once.
-struct Root<'a> {
-    head: Vec<(String, &'a RawValue)>,
-    networks: Vec<Members<'a>>,
+pub(crate) struct Root<'a> {
+    pub(crate) head: Vec<(String, &'a RawValue)>,
+    pub(crate) networks: Vec<Members<'a>>,
     /// `networks` was there twice, which the typed model refuses.
     repeated: bool,
 }
 
 impl Root<'_> {
     /// The text of the document with `networks` set to `[]`.
-    fn head(&self) -> Option<String> {
+    pub(crate) fn head(&self) -> Option<String> {
         if self.repeated {
             return None;
         }
@@ -527,26 +530,44 @@ impl<'de> Deserialize<'de> for Root<'de> {
     }
 }
 
-/// Reads a list of screens one at a time, handing each to a function that
-/// says whether to go on; stopping leaves the rest of the list unread,
-/// which the deserializer reports as an error the caller disregards.
-struct ScreenStream<'f>(&'f mut dyn FnMut(Screen) -> bool);
+impl From<LintScreen> for Screen {
+    fn from(s: LintScreen) -> Screen {
+        s.0
+    }
+}
 
-impl<'de> serde::de::DeserializeSeed<'de> for ScreenStream<'_> {
+/// Reads a list of screens one at a time, each decoded as a `T` (the whole
+/// screen, or the part a lint reads), handing each to a function that says
+/// whether to go on; stopping leaves the rest of the list unread, which the
+/// deserializer reports as an error the caller disregards.
+pub(crate) struct ScreenStream<'f, T>(
+    pub(crate) &'f mut dyn FnMut(Screen) -> bool,
+    pub(crate) std::marker::PhantomData<T>,
+);
+
+impl<'f, T> ScreenStream<'f, T> {
+    pub(crate) fn new(each: &'f mut dyn FnMut(Screen) -> bool) -> Self {
+        ScreenStream(each, std::marker::PhantomData)
+    }
+}
+
+impl<'de, T: Deserialize<'de> + Into<Screen>> serde::de::DeserializeSeed<'de>
+    for ScreenStream<'_, T>
+{
     type Value = ();
     fn deserialize<D: Deserializer<'de>>(self, de: D) -> Result<(), D::Error> {
         de.deserialize_seq(self)
     }
 }
 
-impl<'de> Visitor<'de> for ScreenStream<'_> {
+impl<'de, T: Deserialize<'de> + Into<Screen>> Visitor<'de> for ScreenStream<'_, T> {
     type Value = ();
     fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("a list of screens")
     }
     fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<(), A::Error> {
-        while let Some(s) = seq.next_element::<LintScreen>()? {
-            if !(self.0)(s.0) {
+        while let Some(s) = seq.next_element::<T>()? {
+            if !(self.0)(s.into()) {
                 return Err(serde::de::Error::custom("stopped"));
             }
         }

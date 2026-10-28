@@ -627,12 +627,32 @@ func (b bytesReaderAt) ReadAt(p []byte, off int64) (int, error) {
 // "harbourline.example/retail/portrait-totem-75". A format gives one result
 // per screen using it.
 func Resolve(spec []byte, ref string) ([]Requirements, error) {
-	var res []Requirements
+	// The module answers with the distinct views and, for each screen, which
+	// view it has: a format of 190,000 screens in 500 kinds is a few
+	// megabytes that way rather than 70, and is put together here.
+	var res struct {
+		Views []Requirements `json:"views"`
+		Group []int          `json:"group"`
+		ID    []*string      `json:"id"`
+	}
 	err := runWith(&res, func(in *instance) ([]byte, error) {
-		return in.callDocs("opencrs_resolve", map[string]any{"ref": ref}, spec)
+		return in.callDocs("opencrs_resolve", map[string]any{"ref": ref, "grouped": true}, spec)
 	})
 	if err != nil {
 		return nil, err
 	}
-	return res, nil
+	if len(res.Group) != len(res.ID) {
+		return nil, errors.New("opencrs: resolve: malformed answer")
+	}
+	out := make([]Requirements, len(res.Group))
+	for i, g := range res.Group {
+		if g < 0 || g >= len(res.Views) {
+			return nil, errors.New("opencrs: resolve: malformed answer")
+		}
+		out[i] = res.Views[g]
+		if res.ID[i] != nil {
+			out[i].Screen = *res.ID[i]
+		}
+	}
+	return out, nil
 }

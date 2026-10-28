@@ -26,7 +26,7 @@
 mod ops {
     use chrono::DateTime;
     use opencrs::SPEC_VERSION;
-    use opencrs::batch::{GroupedViews, RequirementsView, check_manifest, lint as lint_document};
+    use opencrs::batch::{GroupedViews, check_manifest, lint as lint_document};
     use opencrs::calc::{self, ScreenWidth};
     use opencrs::json;
     use opencrs::load::{decode_document, decode_manifest};
@@ -35,6 +35,7 @@ mod ops {
     use opencrs::report::{Options, Report};
     use opencrs::resolve::parse_ref;
     use opencrs::schema::SchemaOptions;
+    use opencrs::stream::Resolved;
     use serde::{Deserialize, Serialize};
     use serde_json::{Value, json};
     use std::cell::RefCell;
@@ -194,6 +195,11 @@ mod ops {
     struct ResolveReq {
         #[serde(rename = "ref")]
         reference: String,
+        /// Answer as the distinct views and each screen's view and id
+        /// (`Resolved::grouped`) rather than one view per screen, for a
+        /// caller that puts them together itself.
+        #[serde(default)]
+        grouped: bool,
     }
 
     fn try_resolve(req: Vec<u8>) -> Result<Vec<u8>, Vec<u8>> {
@@ -202,31 +208,26 @@ mod ops {
     }
 
     fn try_resolve_within(req: Vec<u8>) -> Result<Vec<u8>, Vec<u8>> {
-        let (reference, d) = {
-            let f: Frame<ResolveReq> = frame(&req, r#"{"ref": "...", "blobs": [spec]}"#)?;
+        // The document is read a screen at a time and never decoded whole,
+        // and only the distinct views are built; the request is freed before
+        // the answer is written, so at no point are both in memory.
+        let (grouped, resolved) = {
+            let f: Frame<ResolveReq> =
+                frame(&req, r#"{"ref": "...", "grouped"?: bool, "blobs": [spec]}"#)?;
             let [spec] = f.blobs.as_slice() else {
                 return Err(error("usage: resolve needs one spec"));
             };
-            (f.header.reference, decode_document(spec).map_err(error)?)
+            (
+                f.header.grouped,
+                Resolved::from_text(spec, &f.header.reference).map_err(error)?,
+            )
         };
         drop(req);
-        let rf = parse_ref(&reference).map_err(error)?;
-        // Views are built as the screens are resolved, and no more once the
-        // budget is spent: resolve_each then says why.
-        let mut views: Vec<RequirementsView> = Vec::new();
-        d.resolve_each(&rf, |q| {
-            if !opencrs::budget::tripped() {
-                views.push(q.view());
-            }
+        Ok(if grouped {
+            resolved.grouped()
+        } else {
+            resolved.per_screen()
         })
-        .map_err(error)?;
-        if let Some(why) = opencrs::budget::explain(Some(&d)) {
-            return Err(error(format!(
-                "{}: {why}",
-                opencrs::check::CODE_TOO_COMPLEX
-            )));
-        }
-        Ok(json::to_string(&views).into_bytes())
     }
 
     pub fn resolve(req: Vec<u8>) -> Vec<u8> {

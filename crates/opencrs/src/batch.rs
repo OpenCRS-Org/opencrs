@@ -7,7 +7,7 @@ use crate::error::Error;
 use crate::legibility::TextClass;
 use crate::model::{CreativeFile, Document, Insets, Manifest, Media, Region, Segment, Viewing};
 use crate::probe::Probe;
-use crate::report::{Input, Options, Report, ValidateError, validate};
+use crate::report::{Expansion, Input, Options, Report, ValidateError, validate_with};
 use crate::resolve::{Ref, Requirements, ResolveError, Rules, parse_ref};
 use crate::schema::{Kind, SchemaError, SchemaOptions};
 use serde::ser::SerializeSeq;
@@ -102,6 +102,20 @@ pub fn check_manifest_each(
         .iter()
         .flat_map(|f| f.targets.iter().map(move |t| (f, t)))
         .collect();
+    // Each target is expanded (resolved and grouped) once for each document
+    // that describes it, and every file aimed at it is checked against that
+    // expansion, group by group.
+    let mut expansions: HashMap<(usize, &str), Expansion> = HashMap::new();
+    for &(_, target) in &pairs {
+        let Ok(r) = parse_ref(target) else { continue };
+        for (i, d) in docs.iter().enumerate() {
+            if r.publisher == d.publisher {
+                expansions
+                    .entry((i, target.as_str()))
+                    .or_insert_with(|| Expansion::new(d, &r));
+            }
+        }
+    }
     let one = |&(f, target): &(&CreativeFile, &String)| -> Result<Vec<Report>, Error> {
         let _g = budget.install();
         let input = Input {
@@ -110,8 +124,9 @@ pub fn check_manifest_each(
             probe: probes.get(&f.file),
         };
         let mut reports = Vec::new();
-        for d in docs {
-            match validate(d, &input, target, opt) {
+        for (i, d) in docs.iter().enumerate() {
+            let exp = expansions.get(&(i, target.as_str()));
+            match validate_with(d, &input, target, opt, exp) {
                 Ok(rep) => reports.push(rep),
                 Err(ValidateError::OtherPublisher(_)) => {}
                 Err(e) => return Err(Error::msg(format!("{}: {e}", f.file))),

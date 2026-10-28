@@ -349,14 +349,56 @@ fn rule_packs_checked_for_many_different_screens_trip_the_guard() {
     );
 }
 
+/// A target is expanded once per check, however many files aim at it, and
+/// each file is charged by the kinds of screen, not the screens: a campaign
+/// of 500 files with 5 targets each on a format of 20,000 screens in 50
+/// kinds is far inside the budget, as are 500 targets on one file.
 #[test]
-fn many_targets_on_a_big_format_trip_the_guard() {
+fn a_campaign_of_many_files_on_a_big_format_stays_linear() {
+    let mut v = base();
+    let fmt = v["networks"][0]["screens"][0]["format"].clone();
+    v["networks"][0]["venues"] = (0..50)
+        .map(|i| json!({"id": format!("v{i}"), "name": "V"}))
+        .collect();
+    v["networks"][0]["screens"] = (0..20_000)
+        .map(|i| json!({"id": format!("s{i}"), "format": fmt, "venue": format!("v{}", i % 50),
+            "placement": {"environment": "indoor", "level": "L1", "zone": format!("zone {i}")},
+            "viewing": {"distance_m": [2, 6], "dwell_s": 4, "approach": "head-on", "light": "indoor"}}))
+        .collect();
+    let raw = serde_json::to_vec(&v).unwrap();
+    let d = decode_document(&raw).unwrap();
+    let target = format_target();
+    let files: Vec<Value> = (0..500)
+        .map(|i| {
+            json!({"file": format!("c{i}.png"), "media_type": "image/png", "pixels": [1080, 1920],
+                "targets": [target, target, target, target, target],
+                "elements": [{"role": "headline", "text": format!("Offer {i}"), "rect_px": [90, 210, 700, 260], "cap_height_px": 92}]})
+        })
+        .collect();
+    let manifest = json!({"opencrs": "0.1", "campaign": {"id": "c", "advertiser": "A", "category": "IAB8"}, "files": files});
+    let m = decode_manifest(manifest.to_string().as_bytes()).unwrap();
+    let now = chrono::DateTime::parse_from_rfc3339("2026-10-22T12:00:00Z").unwrap();
+    let t = Instant::now();
+    let ((reports, _), b) = budget::measure(raw.len() + m.size, || {
+        check_manifest(&[d], &m, &HashMap::new(), &Options::new(now)).unwrap()
+    });
+    assert_eq!(reports.len(), 2500);
+    let r = Run {
+        tripped: reports
+            .iter()
+            .flat_map(|r| r.checks.iter())
+            .filter(|c| c.code == CODE_TOO_COMPLEX)
+            .map(|c| c.message.clone())
+            .collect(),
+        used: b.used(),
+        limit: b.limit(),
+        secs: t.elapsed().as_secs_f64(),
+    };
+    linear("a campaign of 500 files x 5 targets", &r);
+    // The same target 500 times on one file.
     let raw = doc(json!({}), 1500, false);
     let targets: Vec<String> = (0..500).map(|_| format_target()).collect();
-    let r = check_run(&raw, &targets);
-    assert!(!r.tripped.is_empty(), "used {} of {}", r.used, r.limit);
-    assert!(r.tripped[0].contains("visited"), "{}", r.tripped[0]);
-    assert!(r.tripped[0].contains("format `"), "{}", r.tripped[0]);
+    linear("500 targets on one file", &check_run(&raw, &targets));
 }
 
 #[test]
@@ -489,7 +531,4 @@ fn show_explanations() {
     println!("{}\n", check_run(&raw, &[format_target()]).tripped[0]);
     let raw = doc(json!({"rule_packs": packs(50_000)}), 5_000, true);
     println!("{}\n", check_run(&raw, &[format_target()]).tripped[0]);
-    let raw = doc(json!({}), 1500, false);
-    let targets: Vec<String> = (0..500).map(|_| format_target()).collect();
-    println!("{}", check_run(&raw, &targets).tripped[0]);
 }

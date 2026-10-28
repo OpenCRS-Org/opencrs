@@ -422,7 +422,7 @@ impl Document {
 
     /// `resolve_screen_with` when the screen's format is already known (it
     /// came from the format's screens), so it isn't looked up again.
-    fn resolve_screen_in<'a>(
+    pub(crate) fn resolve_screen_in<'a>(
         &'a self,
         cache: &mut RuleCache,
         n: &'a Network,

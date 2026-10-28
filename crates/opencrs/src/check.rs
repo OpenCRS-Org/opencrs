@@ -231,6 +231,11 @@ impl ScreenTable {
         (self.ids.len() - 1) as u32
     }
 
+    /// The id of the screen at `pos`.
+    pub(crate) fn id(&self, pos: u32) -> &str {
+        &self.ids[pos as usize]
+    }
+
     /// The ids, one per screen begun, and whether any id appears twice.
     pub(crate) fn into_ids(self) -> (Vec<String>, bool) {
         let mut seen = std::collections::HashSet::with_capacity(self.ids.len());

@@ -281,7 +281,7 @@ fn describe(
             at(&path)
         ),
         Work::Screens => format!(
-            "The screens of {label}{} were visited {} times over to answer references to them ({} units); a manifest with many targets on a big format does that.",
+            "The screens of {label}{} were gone through {} times over to answer references to them ({} units).",
             at(&path),
             num(calls),
             num(units)

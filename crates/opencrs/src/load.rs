@@ -18,7 +18,9 @@ pub fn decode_manifest(raw: &[u8]) -> Result<Manifest, Error> {
     Ok(m)
 }
 
-pub(crate) fn decode<T: serde::de::DeserializeOwned>(kind: Kind, raw: &[u8]) -> Result<T, Error> {
+/// Checks `raw` against the schema for `kind`, as decoding does first: the
+/// violations, if any, are the error.
+pub(crate) fn check_schema(kind: Kind, raw: &[u8]) -> Result<(), Error> {
     let errs = validate_schema(kind, raw, &SchemaOptions::default())?;
     if !errs.is_empty() {
         let lines: Vec<String> = errs.iter().map(|e| format!("  {e}")).collect();
@@ -27,6 +29,11 @@ pub(crate) fn decode<T: serde::de::DeserializeOwned>(kind: Kind, raw: &[u8]) -> 
             lines.join("\n")
         )));
     }
+    Ok(())
+}
+
+pub(crate) fn decode<T: serde::de::DeserializeOwned>(kind: Kind, raw: &[u8]) -> Result<T, Error> {
+    check_schema(kind, raw)?;
     // Text that is UTF-8 throughout (checked once, quickly) is read as
     // text, so each string in it isn't checked again.
     Ok(match std::str::from_utf8(raw) {
