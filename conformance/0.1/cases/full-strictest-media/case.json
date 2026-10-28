@@ -1,6 +1,7 @@
 {
   "id": "full-strictest-media",
   "level": "full",
+  "optional": "strictest",
   "spec": "Inheritance: Strictest requirements",
   "description": "File types and codecs are those every screen accepts. Where the screens of a format share no file type, the list is empty and a note says no single file can satisfy every screen.",
   "specs": [

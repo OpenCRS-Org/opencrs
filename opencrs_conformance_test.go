@@ -34,6 +34,7 @@ type cstrictest struct {
 	Ref    string          `json:"ref"`
 	Expect json.RawMessage `json:"expect"`
 	Notes  *int            `json:"notes"`
+	Absent []string        `json:"absent"`
 	Error  string          `json:"error"`
 }
 
@@ -223,7 +224,22 @@ func compareStrictest(c *ccase, spec []byte) []string {
 				continue
 			}
 		}
+		if want == nil && s.Notes == nil {
+			problems = append(problems, s.Ref+": the case expects nothing of the result")
+		}
 		within(want, raw, "", s.Ref, &problems)
+		for _, path := range s.Absent {
+			var at any = raw
+			for _, k := range strings.Split(path, ".") {
+				m, _ := at.(map[string]any)
+				if at = m[k]; at == nil {
+					break
+				}
+			}
+			if at != nil {
+				problems = append(problems, fmt.Sprintf("%s: %s is there, want it left out", s.Ref, path))
+			}
+		}
 		if notes, _ := raw["notes"].([]any); s.Notes != nil && len(notes) != *s.Notes {
 			problems = append(problems, fmt.Sprintf("%s: %d notes, want %d", s.Ref, len(notes), *s.Notes))
 		}

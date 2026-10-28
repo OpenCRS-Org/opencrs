@@ -21,9 +21,11 @@
 use crate::budget::{self, Work};
 use crate::error::Error;
 use crate::json;
-use crate::legibility::{KEY_ROLES, LEGAL_ROLES, TextClass};
+use crate::legibility::{DEFAULT_READING_RATE_WPS, KEY_ROLES, LEGAL_ROLES, TextClass};
 use crate::model::*;
+use crate::packcheck::{DEFAULT_LEGIBILITY_RATIO, glance_at};
 use crate::resolve::{Key, Requirements, intersect, parse_ref, screen_key};
+use crate::rulepack::{RulePacks, builtin_rule_packs};
 use crate::stream::{Sink, walk};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -32,9 +34,15 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 pub struct Strictest {
     reference: String,
     screens: usize,
-    seen: HashSet<Vec<u8>>,
+    /// The kinds of screen combined, each with the troubles it had (a bit
+    /// for each of `troubles`), so a screen of that kind skipped later is
+    /// counted in them.
+    seen: HashMap<Vec<u8>, u32>,
     key: Vec<u8>,
     error: Option<String>,
+    packs_known: &'static RulePacks,
+    troubles: Vec<Trouble>,
+    bits: u32,
 
     format: String,
     pixels: Option<([i64; 2], String)>,
@@ -42,11 +50,13 @@ pub struct Strictest {
     physical_same: bool,
 
     accepted: Option<Vec<String>>,
-    statics: Option<Vec<String>>,
-    motions: Option<Vec<String>>,
+    /// Types some screen lists as motion, which that screen treats a file
+    /// of the type as, whatever others list it as.
+    motion_types: Uniq,
+    /// For each type listed as motion, the shortest and longest slot of the
+    /// screens that list it so.
+    slots: HashMap<String, (Pick<f64>, Pick<f64>)>,
     codecs: Option<Vec<String>>,
-    slot_s: Pick<f64>,
-    slot_longest: Pick<f64>,
     fps: Pick<f64>,
     max_bytes: Pick<i64>,
     colour: Option<(String, String)>,
@@ -68,8 +78,8 @@ pub struct Strictest {
     caps: BTreeMap<String, (i64, String)>,
     elements: Vec<Combined>,
     element_at: HashMap<String, usize>,
-    conditional: Vec<(String, String)>,
-    conditional_seen: HashSet<(String, String)>,
+    conditional: Vec<Conditional>,
+    conditional_at: HashMap<(String, String), usize>,
 
     max_words: Pick<i64>,
     categories: Uniq,
@@ -87,7 +97,6 @@ pub struct Strictest {
     max_transition: Pick<f64>,
 
     notes: Vec<String>,
-    noted: HashSet<String>,
 }
 
 /// A required element as combined: where it may sit, and what was said of it.
@@ -95,6 +104,53 @@ struct Combined {
     role: String,
     within: Option<Rect>,
     notes: Vec<String>,
+}
+
+/// A required element that applies when the creative has a tag, combined
+/// over the screens as an unconditional one is.
+struct Conditional {
+    role: String,
+    when: String,
+    px: Option<i64>,
+    within: Option<Rect>,
+    notes: Vec<String>,
+}
+
+/// Something a minimum size couldn't be worked out for, and the screens
+/// (how many, and the first few) it was true of.
+struct Trouble {
+    reason: String,
+    count: usize,
+    ids: Vec<String>,
+}
+
+/// How many screens a note names.
+const NAMED: usize = 5;
+
+impl Trouble {
+    fn add(&mut self, id: &str) {
+        self.count += 1;
+        if self.ids.len() < NAMED {
+            self.ids.push(id.to_string());
+        }
+    }
+
+    fn note(&self) -> String {
+        let names: Vec<String> = self.ids.iter().map(|i| label(i)).collect();
+        let mut at = names.join(", ");
+        if self.count > self.ids.len() {
+            at += &format!(" and {} more", self.count - self.ids.len());
+        }
+        let n = if self.count == 1 {
+            "1 screen".to_string()
+        } else {
+            format!("{} screens", self.count)
+        };
+        format!(
+            "A minimum text size can't be worked out on {n} ({at}): {}. It is missing from min_cap_height_px, or only a floor there.",
+            self.reason
+        )
+    }
 }
 
 /// The extreme value seen of a limit, and the first screen that had it.
@@ -200,6 +256,8 @@ fn meet<'a>(slot: &mut Option<Vec<String>>, list: impl Iterator<Item = &'a Strin
     }
 }
 
+const NO_PHYSICAL: &str = "no physical_mm to convert millimetres to pixels";
+
 fn label(id: &str) -> String {
     if id.is_empty() {
         "the format".to_string()
@@ -213,19 +271,20 @@ impl Strictest {
         Strictest {
             reference,
             screens: 0,
-            seen: HashSet::new(),
+            seen: HashMap::new(),
             key: Vec::new(),
             error: None,
+            packs_known: builtin_rule_packs(),
+            troubles: Vec::new(),
+            bits: 0,
             format: String::new(),
             pixels: None,
             physical: None,
             physical_same: true,
             accepted: None,
-            statics: None,
-            motions: None,
+            motion_types: Uniq::default(),
+            slots: HashMap::new(),
             codecs: None,
-            slot_s: Pick::default(),
-            slot_longest: Pick::default(),
             fps: Pick::default(),
             max_bytes: Pick::default(),
             colour: None,
@@ -245,7 +304,7 @@ impl Strictest {
             elements: Vec::new(),
             element_at: HashMap::new(),
             conditional: Vec::new(),
-            conditional_seen: HashSet::new(),
+            conditional_at: HashMap::new(),
             max_words: Pick::default(),
             categories: Uniq::default(),
             packs: Uniq::default(),
@@ -261,7 +320,6 @@ impl Strictest {
             min_dwell: Pick::default(),
             max_transition: Pick::default(),
             notes: Vec::new(),
-            noted: HashSet::new(),
         }
     }
 
@@ -279,13 +337,36 @@ impl Strictest {
         }
     }
 
-    /// Says something once, however many screens it holds for: `key` names
-    /// what it is about.
-    fn note_once(&mut self, key: &str, text: impl FnOnce() -> String) {
-        if !self.noted.contains(key) {
-            self.noted.insert(key.to_string());
-            self.notes.push(text());
+    /// Records that something couldn't be worked out for this screen (and,
+    /// by its bit, for the screens of its kind).
+    fn trouble(&mut self, reason: &str, id: &str) {
+        let at = match self.troubles.iter().position(|t| t.reason == reason) {
+            Some(i) => i,
+            None => {
+                self.troubles.push(Trouble {
+                    reason: reason.to_string(),
+                    count: 0,
+                    ids: Vec::new(),
+                });
+                self.troubles.len() - 1
+            }
+        };
+        if at < 32 && self.bits & (1 << at) == 0 {
+            self.bits |= 1 << at;
+            self.troubles[at].add(id);
         }
+    }
+
+    /// A required element's minimum size in pixels on this screen.
+    fn element_px(&mut self, q: &Requirements<'_>, e: &RequiredElement, id: &str) -> Option<i64> {
+        let mut px = e.min_cap_height_px;
+        if let Some(mm) = e.min_cap_height_mm {
+            match q.mm_to_px(mm) {
+                Some(p) => px = Some(px.map_or(p, |x| x.max(p))),
+                None => self.trouble(NO_PHYSICAL, id),
+            }
+        }
+        px
     }
 
     fn cap(&mut self, role: &str, px: i64, screen: &str) {
@@ -339,13 +420,17 @@ impl Strictest {
         // A format that lists no static types takes none, and one with no
         // motion types takes no motion: a file must be listed by each screen.
         meet(&mut self.accepted, st.iter().chain(mo));
-        meet(&mut self.statics, st.iter());
-        meet(&mut self.motions, mo.iter());
+        for t in mo {
+            self.motion_types.add(t);
+            if m.slot_s.is_some() {
+                let (short, long) = self.slots.entry(t.clone()).or_default();
+                short.smaller(m.slot_s, id);
+                long.larger(m.slot_s, id);
+            }
+        }
         if let Some(c) = m.codecs.as_deref().filter(|c| !c.is_empty()) {
             meet(&mut self.codecs, c.iter());
         }
-        self.slot_s.smaller(m.slot_s, id);
-        self.slot_longest.larger(m.slot_s, id);
         self.fps.smaller(m.fps, id);
         self.max_bytes.smaller(m.max_bytes, id);
         if !m.colour_space.is_empty() {
@@ -405,12 +490,7 @@ impl Strictest {
                 continue;
             }
             if !missing.is_empty() {
-                self.note_once(missing, || {
-                    format!(
-                        "The minimum text size can't be worked out on {}: {missing}. It is missing from min_cap_height_px, or only a floor there.",
-                        label(id)
-                    )
-                });
+                self.trouble(missing, id);
             }
             if m.px > 0 {
                 for role in roles {
@@ -419,25 +499,32 @@ impl Strictest {
             }
         }
         for e in q.rules.required_elements.iter() {
+            let px = self.element_px(q, e, id);
             if !e.when.is_empty() {
                 let k = (e.role.clone(), e.when.clone());
-                if !self.conditional_seen.contains(&k) {
-                    self.conditional_seen.insert(k.clone());
-                    self.conditional.push(k);
+                let at = match self.conditional_at.get(&k) {
+                    Some(&i) => i,
+                    None => {
+                        self.conditional.push(Conditional {
+                            role: e.role.clone(),
+                            when: e.when.clone(),
+                            px: None,
+                            within: None,
+                            notes: Vec::new(),
+                        });
+                        self.conditional_at.insert(k, self.conditional.len() - 1);
+                        self.conditional.len() - 1
+                    }
+                };
+                let c = &mut self.conditional[at];
+                c.px = c.px.max(px);
+                if let Some(w) = e.within_rect_px {
+                    c.within = Some(c.within.map_or(w, |x| intersect(x, w)));
+                }
+                if !e.notes.is_empty() && !has(&c.notes, &e.notes) {
+                    c.notes.push(e.notes.clone());
                 }
                 continue;
-            }
-            let mut px = e.min_cap_height_px;
-            if let Some(mm) = e.min_cap_height_mm {
-                match q.mm_to_px(mm) {
-                    Some(p) => px = Some(px.map_or(p, |x| x.max(p))),
-                    None => self.note_once("element mm", || {
-                        format!(
-                            "A required element's minimum size in millimetres can't be turned into pixels on {}: no physical_mm. It is missing from min_cap_height_px.",
-                            label(id)
-                        )
-                    }),
-                }
             }
             if let Some(px) = px {
                 self.cap(&e.role, px, id);
@@ -480,6 +567,49 @@ impl Strictest {
         for c in r.conflicts.iter() {
             self.conflicts.add(c);
         }
+        let rate = r.reading_rate_wps.unwrap_or(DEFAULT_READING_RATE_WPS);
+        let speed = q
+            .screen
+            .and_then(|s| s.placement.as_ref())
+            .and_then(|p| p.speed_kmh);
+        let dist = q
+            .screen
+            .and_then(|s| s.viewing.as_ref())
+            .and_then(|v| v.distance_m);
+        for reference in r.rule_packs.iter() {
+            let Some(p) = self.packs_known.get(reference) else {
+                continue;
+            };
+            if let Some(m) = &p.creative.motion {
+                if m.allowed == Some(false) {
+                    self.motion_off.raise(id);
+                }
+                if m.no_flashing == Some(true) {
+                    self.no_flashing.raise(id);
+                }
+            }
+            if p.creative.max_words_at_glance
+                && let (Some(speed), Some(dist)) = (speed, dist)
+            {
+                // At most the words a driver reads in a glance, in text big
+                // enough to read from where reading must start.
+                let g = glance_at(speed, dist, rate);
+                self.max_words.smaller(Some(g.words), id);
+                let ratio = r
+                    .legibility
+                    .as_ref()
+                    .and_then(|l| l.ratio)
+                    .unwrap_or(DEFAULT_LEGIBILITY_RATIO);
+                match q.mm_to_px(crate::calc::cap_height_mm(g.read_from_m, ratio)) {
+                    Some(px) => {
+                        for role in KEY_ROLES {
+                            self.cap(role, px, id);
+                        }
+                    }
+                    None => self.trouble(NO_PHYSICAL, id),
+                }
+            }
+        }
         let m = &r.motion;
         let placed_off = q
             .screen
@@ -512,11 +642,16 @@ impl Sink for Strictest {
         }
         self.key.clear();
         screen_key(s, &mut self.key);
-        if self.seen.contains(&self.key) {
-            self.screens += 1;
-            return true;
+        let Some(&bits) = self.seen.get(&self.key) else {
+            return false;
+        };
+        self.screens += 1;
+        for (i, t) in self.troubles.iter_mut().enumerate() {
+            if i < 32 && bits & (1 << i) != 0 {
+                t.add(&s.id);
+            }
         }
-        false
+        true
     }
 
     fn add(&mut self, q: &Requirements<'_>) {
@@ -538,11 +673,13 @@ impl Sink for Strictest {
         if q.screen.is_some() {
             self.screens += 1;
         }
-        self.key.clear();
-        if q.key(&mut self.key) {
-            self.seen.insert(self.key.clone());
-        }
+        let mut key = Vec::new();
+        let keyed = q.key(&mut key);
+        self.bits = 0;
         self.fold(q);
+        if keyed {
+            self.seen.insert(key, self.bits);
+        }
     }
 }
 
@@ -568,6 +705,7 @@ struct Out<'a> {
     viewing: Option<ViewingOut>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     min_cap_height_px: BTreeMap<&'a str, i64>,
+    #[serde(skip_serializing_if = "RulesOut::is_empty")]
     rules: RulesOut<'a>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     conditional_elements_left_out: Vec<Left<'a>>,
@@ -628,10 +766,32 @@ struct RulesOut<'a> {
     conflicts: &'a [String],
 }
 
+impl RulesOut<'_> {
+    fn is_empty(&self) -> bool {
+        self.required_elements.is_empty()
+            && self.max_words.is_none()
+            && self.restricted_categories.is_empty()
+            && self.motion.is_none()
+            && self.brightness.is_none()
+            && self.playback.is_none()
+            && self.rule_packs.is_empty()
+            && self.notes.is_empty()
+            && self.conflicts.is_empty()
+    }
+}
+
+/// A required element left out of the rules because it applies only to
+/// creative with a tag, with what it asks of such creative.
 #[derive(Serialize)]
 struct Left<'a> {
     role: &'a str,
     when: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    min_cap_height_px: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    within_rect_px: Option<Rect>,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    notes: String,
 }
 
 impl Strictest {
@@ -661,16 +821,14 @@ impl Strictest {
             sources.insert("pixels".into(), s);
         }
 
-        // What a file may be: listed by every screen.
+        // What a file may be: listed by every screen. A type any screen
+        // lists as motion is motion there, so it is listed as motion.
         let accepted = self.accepted.clone().unwrap_or_default();
-        let (mut stat, mut motion) = (
-            self.statics.clone().unwrap_or_default(),
-            self.motions.clone().unwrap_or_default(),
-        );
+        let off = self.motion_off.0.as_deref();
         let mut media = MediaOut {
             static_types: None,
             motion: None,
-            slot_s: self.slot_s.value(),
+            slot_s: None,
             fps: self.fps.value(),
             codecs: self.codecs.clone(),
             max_bytes: self.max_bytes.value(),
@@ -681,31 +839,59 @@ impl Strictest {
                 self.audio_on.then_some(true)
             },
         };
-        if accepted.is_empty() {
-            notes.push(
-                "No file type is accepted by every screen, so no single file can satisfy them all. media.static is empty."
-                    .into(),
-            );
+        let (mut stat, mut motion): (Vec<String>, Vec<String>) = accepted
+            .iter()
+            .cloned()
+            .partition(|t| !self.motion_types.set.contains(t));
+        if let Some(at) = off {
+            let shown = if at.is_empty() {
+                "the format".to_string()
+            } else {
+                label(at)
+            };
+            let gone = if motion.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    " The types {} are motion on some screen, so they can't be used either.",
+                    motion.join(", ")
+                )
+            };
+            notes.push(format!(
+                "Motion isn't allowed on {shown}, so media.motion is empty: supply a static file.{gone}"
+            ));
+            motion.clear();
+        }
+        if stat.is_empty() && motion.is_empty() {
+            if accepted.is_empty() {
+                notes.push(
+                    "No file type is accepted by every screen, so no single file can satisfy them all. media.static is empty."
+                        .into(),
+                );
+            } else {
+                notes.push("No file type is usable on every screen. media.static is empty.".into());
+            }
             media.static_types = Some(Vec::new());
         } else {
-            // A type listed as static by one screen and motion by another
-            // is placed by its kind.
-            for t in &accepted {
-                if !has(&stat, t) && !has(&motion, t) {
-                    if t.starts_with("video/") {
-                        motion.push(t.clone());
-                    } else {
-                        stat.push(t.clone());
-                    }
-                }
-            }
-            media.static_types = (!stat.is_empty()).then_some(stat);
-            media.motion = (!motion.is_empty()).then_some(motion);
+            media.static_types = (!stat.is_empty()).then_some(std::mem::take(&mut stat));
+            media.motion = (!motion.is_empty()).then_some(motion.clone());
         }
+        // The slot matters to the types that are motion: the shortest of the
+        // screens that list them so.
+        let mut slot = (Pick::<f64>::default(), Pick::<f64>::default());
+        for t in &motion {
+            if let Some((short, long)) = self.slots.get(t) {
+                slot.0
+                    .smaller(short.value(), short.0.as_ref().map_or("", |p| &p.1));
+                slot.1
+                    .larger(long.value(), long.0.as_ref().map_or("", |p| &p.1));
+            }
+        }
+        media.slot_s = slot.0.value();
         if self.codecs.as_ref().is_some_and(Vec::is_empty) {
             notes.push("No codec is accepted by every screen, so no single file can satisfy them all. media.codecs is empty.".into());
         }
-        if let (Some((v, at)), Some((longest, _))) = (&self.slot_s.0, &self.slot_longest.0)
+        if let (Some((v, at)), Some((longest, _))) = (&slot.0.0, &slot.1.0)
             && v != longest
         {
             notes.push(format!(
@@ -720,7 +906,7 @@ impl Strictest {
                 media.colour_space = c.clone();
             }
         }
-        from(&mut sources, "media.slot_s", &self.slot_s.0);
+        from(&mut sources, "media.slot_s", &slot.0.0);
         from(&mut sources, "media.fps", &self.fps.0);
         from(&mut sources, "media.max_bytes", &self.max_bytes.0);
         if !self.colour_differs {
@@ -796,12 +982,16 @@ impl Strictest {
             .collect();
 
         if !self.packs.list.is_empty() {
-            notes.push("Rule packs are listed, not combined: what they allow depends on each screen's placement (speed, road facing, zone), so check a file against the screens it is for.".into());
+            notes.push("Rule packs are listed. Their bans on motion and flashing and their glance text limits are in the limits above where the screens give the speed and viewing distance they need; the rest (playback, luminance and school-zone rules, and the review for traffic-device imagery) depend on each screen's placement and aren't combined, so check those against the screens a file is for.".into());
         }
         from(&mut sources, "rules.max_words", &self.max_words.0);
         flag(&mut sources, "rules.motion.allowed", &self.motion_off);
         flag(&mut sources, "rules.motion.no_flashing", &self.no_flashing);
-        from(&mut sources, "rules.motion.max_flash_hz", &self.flash_hz.0);
+        if self.no_flashing.0.is_some() {
+            flag(&mut sources, "rules.motion.max_flash_hz", &self.no_flashing);
+        } else {
+            from(&mut sources, "rules.motion.max_flash_hz", &self.flash_hz.0);
+        }
         from(
             &mut sources,
             "rules.motion.min_frame_hold_s",
@@ -831,7 +1021,11 @@ impl Strictest {
                 self.motion_on.then_some(true)
             },
             no_flashing: self.no_flashing.0.is_some().then_some(true),
-            max_flash_hz: self.flash_hz.value(),
+            max_flash_hz: if self.no_flashing.0.is_some() {
+                Some(0.0)
+            } else {
+                self.flash_hz.value()
+            },
             min_frame_hold_s: self.frame_hold_s.value(),
         };
         let brightness = Brightness {
@@ -854,6 +1048,12 @@ impl Strictest {
             conflicts: &self.conflicts.list,
         };
 
+        notes.extend(
+            self.troubles
+                .iter()
+                .filter(|t| t.count > 0)
+                .map(Trouble::note),
+        );
         let out = Out {
             reference: &self.reference,
             screens: self.screens,
@@ -874,7 +1074,13 @@ impl Strictest {
             conditional_elements_left_out: self
                 .conditional
                 .iter()
-                .map(|(role, when)| Left { role, when })
+                .map(|c| Left {
+                    role: &c.role,
+                    when: &c.when,
+                    min_cap_height_px: c.px,
+                    within_rect_px: c.within,
+                    notes: c.notes.join("; "),
+                })
                 .collect(),
             notes,
             sources,
@@ -1118,8 +1324,108 @@ mod tests {
         assert_eq!(v["media"]["static"], json!([]));
         assert_eq!(v["media"]["codecs"], json!([]));
         assert!(v["media"].get("colour_space").is_none());
+        // No motion type, so the slot lengths don't matter.
+        assert!(v["media"].get("slot_s").is_none());
+        assert_eq!(v["notes"].as_array().unwrap().len(), 3, "{v}");
+    }
+
+    /// Different slots are noted only for the screens a motion file is for.
+    #[test]
+    fn slot_lengths_count_only_where_the_file_is_motion() {
+        let f = json!({"id": "f", "pixels": [10, 10], "media": {"static": ["image/png"],
+            "motion": ["video/mp4"], "slot_s": 10}});
+        let still = json!({"static": ["image/png", "video/mp4"], "motion": [], "slot_s": 15});
+        let moving = json!({"static": ["image/png"], "motion": ["video/mp4"], "slot_s": 15});
+        let docs = |second: Value| {
+            doc(
+                f.clone(),
+                json!([{"id": "A", "format": "f"},
+                    {"id": "B", "format": "f", "overrides": {"media": second}}]),
+            )
+        };
+        // B lists the type as static: its slot doesn't apply to the file.
+        let v = strictest(&docs(still), "p.example/n/f").unwrap();
         assert_eq!(v["media"]["slot_s"], 10);
-        assert_eq!(v["notes"].as_array().unwrap().len(), 4, "{v}");
+        assert!(v.get("notes").is_none(), "{v}");
+        let v = strictest(&docs(moving), "p.example/n/f").unwrap();
+        assert_eq!(v["media"]["slot_s"], 10);
+        assert_eq!(v["notes"].as_array().unwrap().len(), 1, "{v}");
+    }
+
+    /// A type that any screen treats as motion is listed as motion, and
+    /// unusable once motion is disallowed.
+    #[test]
+    fn a_motion_type_is_motion_and_follows_the_motion_rules() {
+        let f = json!({"id": "f", "pixels": [10, 10], "media": {"static": ["image/png", "image/gif"],
+            "motion": ["image/gif"]}});
+        let screens = json!([{"id": "A", "format": "f"},
+            {"id": "B", "format": "f", "overrides": {"media": {"static": ["image/png", "image/gif"]}}}]);
+        let v = strictest(&doc(f.clone(), screens), "p.example/n/f").unwrap();
+        assert_eq!(v["media"]["static"], json!(["image/png"]));
+        assert_eq!(v["media"]["motion"], json!(["image/gif"]));
+        let screens = json!([{"id": "A", "format": "f"},
+            {"id": "B", "format": "f", "placement": {"motion_allowed": false}}]);
+        let v = strictest(&doc(f, screens), "p.example/n/f").unwrap();
+        assert_eq!(v["media"]["static"], json!(["image/png"]));
+        assert!(v["media"].get("motion").is_none());
+        assert_eq!(v["rules"]["motion"]["allowed"], false);
+        assert_eq!(v["sources"]["rules.motion.allowed"], "B");
+        assert_eq!(v["notes"].as_array().unwrap().len(), 1, "{v}");
+    }
+
+    #[test]
+    fn conditional_elements_keep_their_limits() {
+        let f = json!({"id": "f", "pixels": [100, 100], "physical_mm": [50, 50],
+            "media": {"static": ["image/png"]},
+            "rules": {"required_elements": [
+                {"role": "legal", "when": "offer", "min_cap_height_mm": 10, "within_rect_px": [0, 0, 80, 80]}]}});
+        let screens = json!([{"id": "A", "format": "f"},
+            {"id": "B", "format": "f", "overrides": {"physical_mm": [100, 100]},
+             "rules": {"required_elements": [
+                {"role": "legal", "when": "offer", "min_cap_height_px": 12, "within_rect_px": [20, 0, 80, 80]}]}}]);
+        let v = strictest(&doc(f, screens), "p.example/n/f").unwrap();
+        // 10 mm is 20 px on A and 10 px on B; B asks 12.
+        assert_eq!(
+            v["conditional_elements_left_out"],
+            json!([{"role": "legal", "when": "offer", "min_cap_height_px": 20,
+                "within_rect_px": [20, 0, 60, 80]}])
+        );
+        assert!(v.get("rules").is_none(), "{v}");
+    }
+
+    #[test]
+    fn rule_packs_and_flashing_are_folded_in() {
+        let f = json!({"id": "f", "pixels": [1000, 2000], "physical_mm": [1000, 2000],
+            "media": {"static": ["image/png"], "motion": ["video/mp4"]}});
+        let screens = json!([{"id": "A", "format": "f"},
+            {"id": "B", "format": "f", "viewing": {"distance_m": [20, 150]},
+             "placement": {"speed_kmh": 80},
+             "rules": {"rule_packs": ["au-nsw-transport-corridor@2017-11"]}}]);
+        let v = strictest(&doc(f, screens), "p.example/n/f").unwrap();
+        assert_eq!(v["rules"]["motion"]["allowed"], false);
+        assert_eq!(v["rules"]["motion"]["no_flashing"], true);
+        assert_eq!(v["rules"]["motion"]["max_flash_hz"], 0);
+        assert_eq!(v["rules"]["max_words"], 4);
+        assert_eq!(v["sources"]["rules.max_words"], "B");
+        assert!(v["min_cap_height_px"]["headline"].as_i64().unwrap() > 0);
+        assert!(v["media"].get("motion").is_none());
+    }
+
+    #[test]
+    fn unresolvable_sizes_name_the_screens() {
+        let f = json!({"id": "f", "pixels": [100, 100], "media": {"static": ["image/png"]},
+            "rules": {"legibility": {"ratio": 100}}});
+        let screens: Vec<Value> = (0..8)
+            .map(|i| json!({"id": format!("s{i}"), "format": "f", "placement": {"zone": "z"}}))
+            .collect();
+        let v = strictest(&doc(f, screens.into()), "p.example/n/f").unwrap();
+        let notes = v["notes"].as_array().unwrap();
+        assert_eq!(notes.len(), 1, "{v}");
+        let n = notes[0].as_str().unwrap();
+        assert!(
+            n.contains("8 screens") && n.contains("\"s0\"") && n.contains("and 3 more"),
+            "{n}"
+        );
     }
 
     #[test]

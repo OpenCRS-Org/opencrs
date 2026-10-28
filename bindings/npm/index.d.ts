@@ -112,8 +112,14 @@ export interface StrictestRequirements {
   segments?: Record<string, unknown>[];
   viewing?: Record<string, unknown>;
   min_cap_height_px?: Record<string, number>;
-  rules: Record<string, unknown>;
-  conditional_elements_left_out?: { role: string; when: string }[];
+  rules?: Record<string, unknown>;
+  conditional_elements_left_out?: {
+    role: string;
+    when: string;
+    min_cap_height_px?: number;
+    within_rect_px?: [number, number, number, number];
+    notes?: string;
+  }[];
   notes?: string[];
   sources: Record<string, string>;
 }

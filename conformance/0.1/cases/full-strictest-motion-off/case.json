@@ -1,0 +1,39 @@
+{
+  "id": "full-strictest-motion-off",
+  "level": "full",
+  "optional": "strictest",
+  "spec": "Inheritance: Strictest requirements",
+  "description": "One screen doesn't allow motion. No motion file can pass everywhere, so the strictest result has no motion types, and the gif that one screen treats as motion can't be used as a static file either; a note says so. Flashing is limited to 0 Hz where a screen forbids it.",
+  "specs": [
+    "screens.json"
+  ],
+  "strictest": [
+    {
+      "ref": "conf.example/n/f",
+      "notes": 1,
+      "absent": [
+        "media.motion",
+        "media.slot_s"
+      ],
+      "expect": {
+        "screens": 2,
+        "media": {
+          "static": [
+            "image/png"
+          ]
+        },
+        "rules": {
+          "motion": {
+            "allowed": false,
+            "no_flashing": true,
+            "max_flash_hz": 0
+          }
+        },
+        "sources": {
+          "rules.motion.allowed": "B",
+          "rules.motion.max_flash_hz": "A"
+        }
+      }
+    }
+  ]
+}

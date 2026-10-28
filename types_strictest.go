@@ -26,7 +26,7 @@ type StrictestRequirements struct {
 	// MinCapHeightPX is the minimum text size for each role in pixels, the
 	// largest of the screens' (each worked out at its own viewing distance).
 	MinCapHeightPX map[string]int `json:"min_cap_height_px,omitempty"`
-	Rules          StrictestRules `json:"rules"`
+	Rules          StrictestRules `json:"rules,omitzero"`
 	// ConditionalElementsLeftOut lists the required elements that apply only
 	// when the creative is tagged for them, which are not in the rules.
 	ConditionalElementsLeftOut []ConditionalElement `json:"conditional_elements_left_out,omitempty"`
@@ -66,6 +66,12 @@ type RequiredElement struct {
 type ConditionalElement struct {
 	Role string `json:"role"`
 	When string `json:"when"`
+	// MinCapHeightPX and WithinRectPX are what the element asks of creative
+	// with the tag: the largest size in pixels, and the overlap of the
+	// position limits, over the screens.
+	MinCapHeightPX *int    `json:"min_cap_height_px,omitempty"`
+	WithinRectPX   *[4]int `json:"within_rect_px,omitempty"`
+	Notes          string  `json:"notes,omitempty"`
 }
 
 // MotionRules limit animation.

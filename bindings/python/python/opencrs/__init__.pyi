@@ -78,8 +78,8 @@ class StrictestRequirements(TypedDict):
     segments: NotRequired[list[dict[str, Any]]]
     viewing: NotRequired[dict[str, Any]]
     min_cap_height_px: NotRequired[dict[str, int]]
-    rules: dict[str, Any]
-    conditional_elements_left_out: NotRequired[list[dict[str, str]]]
+    rules: NotRequired[dict[str, Any]]
+    conditional_elements_left_out: NotRequired[list[dict[str, Any]]]
     notes: NotRequired[list[str]]
     sources: dict[str, str]
 

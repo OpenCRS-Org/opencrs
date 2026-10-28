@@ -74,6 +74,7 @@ Register-ArgumentCompleter -Native -CommandName 'opencrs' -ScriptBlock {
             [CompletionResult]::new('--cmd', '--cmd', [CompletionResultType]::ParameterName, 'External validator to test')
             [CompletionResult]::new('-v', '-v', [CompletionResultType]::ParameterName, 'List passing cases too')
             [CompletionResult]::new('--verbose', '--verbose', [CompletionResultType]::ParameterName, 'List passing cases too')
+            [CompletionResult]::new('--no-strictest', '--no-strictest', [CompletionResultType]::ParameterName, 'Skip the cases for optional strictest requirements')
             [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Show help (--help shows more)')
             [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Show help (--help shows more)')
             break

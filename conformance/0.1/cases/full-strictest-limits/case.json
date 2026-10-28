@@ -1,6 +1,7 @@
 {
   "id": "full-strictest-limits",
   "level": "full",
+  "optional": "strictest",
   "spec": "Inheritance: Strictest requirements",
   "description": "Maxima take the smallest value and minima the largest, including a word limit worked out from dwell; restricted categories are added together; motion limits take the stricter value from whichever screen has it.",
   "specs": [

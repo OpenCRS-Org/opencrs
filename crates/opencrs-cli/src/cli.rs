@@ -195,7 +195,8 @@ pub enum Cmd {
             or against another validator given with --cmd. The command is run through the \
             shell with each case directory as its last argument and must print the reports \
             as a JSON array, or for a case with strictest expectations, the strictest \
-            requirements of each as a JSON array.",
+            requirements of each as a JSON array. Cases for strictest requirements are \
+            optional: a validator that doesn't offer them is tested with --no-strictest.",
         after_help = exit_status!(exit_conformance!()),
         after_long_help = concat!(
             examples!(
@@ -388,6 +389,13 @@ pub struct ConformanceArgs {
     /// List passing cases too
     #[arg(short, long, alias = "v")]
     pub verbose: bool,
+    /// Skip the cases for optional strictest requirements
+    #[arg(
+        long = "no-strictest",
+        long_help = "Skip the cases for strictest requirements, which a validator may \
+            offer but need not. Use it for a validator that doesn't."
+    )]
+    pub no_strictest: bool,
 }
 
 #[derive(Args)]

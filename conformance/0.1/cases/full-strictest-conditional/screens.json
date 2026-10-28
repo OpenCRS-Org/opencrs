@@ -33,7 +33,13 @@
               {
                 "role": "promo",
                 "when": "offer",
-                "min_cap_height_mm": 30
+                "min_cap_height_mm": 30,
+                "within_rect_px": [
+                  0,
+                  0,
+                  600,
+                  600
+                ]
               }
             ]
           }
@@ -47,12 +53,28 @@
         {
           "id": "B",
           "format": "f",
+          "overrides": {
+            "physical_mm": [
+              500,
+              1000
+            ]
+          },
           "rules": {
             "required_elements": [
               {
                 "role": "legal",
                 "when": "alcohol",
                 "min_cap_height_mm": 20
+              },
+              {
+                "role": "promo",
+                "when": "offer",
+                "within_rect_px": [
+                  300,
+                  300,
+                  600,
+                  600
+                ]
               }
             ]
           }

@@ -1,6 +1,7 @@
 {
   "id": "full-strictest-screen-ref",
   "level": "full",
+  "optional": "strictest",
   "spec": "Inheritance: Strictest requirements",
   "description": "A reference to one screen gives that screen's own requirements, whatever the other screens of its format ask: here S2's own safe area, regions, sizes and limits, not S1's.",
   "specs": [

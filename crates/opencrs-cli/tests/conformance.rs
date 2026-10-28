@@ -39,6 +39,12 @@ fn cases_are_well_formed() {
             "{}: needs spec and description",
             c.id
         );
+        assert_eq!(
+            c.is_optional(),
+            !c.strictest.is_empty(),
+            "{}: strictest cases, and only they, are optional",
+            c.id
+        );
         for name in c
             .specs
             .iter()

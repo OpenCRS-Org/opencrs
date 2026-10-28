@@ -148,7 +148,7 @@ A publisher\*(Aqs domain, or the URL of one document
 .SS "opencrs conformance"
 Run the conformance suite against a validator.
 .PP
-Runs the cases in the conformance directory against this tool\*(Aqs own validator, or against another validator given with \-\-cmd. The command is run through the shell with each case directory as its last argument and must print the reports as a JSON array, or for a case with strictest expectations, the strictest requirements of each as a JSON array.
+Runs the cases in the conformance directory against this tool\*(Aqs own validator, or against another validator given with \-\-cmd. The command is run through the shell with each case directory as its last argument and must print the reports as a JSON array, or for a case with strictest expectations, the strictest requirements of each as a JSON array. Cases for strictest requirements are optional: a validator that doesn\*(Aqt offer them is tested with \-\-no\-strictest.
 .PP
 \fBopencrs conformance\fR [OPTIONS] [DIR]
 .ie \n(.g .ds Aq \(aq
@@ -162,6 +162,9 @@ External validator to test. It is run with each case directory as its last argum
 .TP
 \fB\-v\fR, \fB\-\-verbose\fR
 List passing cases too
+.TP
+\fB\-\-no\-strictest\fR
+Skip the cases for strictest requirements, which a validator may offer but need not. Use it for a validator that doesn\*(Aqt.
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Show help (\-\-help shows more)

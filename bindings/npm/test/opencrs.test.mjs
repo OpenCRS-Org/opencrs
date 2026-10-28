@@ -200,7 +200,12 @@ test("checkDir passes every conformance case", () => {
           continue;
         }
         const got = opencrs.resolveStrictest(specs[0], want.ref);
+        assert.ok(want.expect !== undefined || want.notes !== undefined, `${name}: the case expects nothing`);
         within(want.expect, got, `${name} ${want.ref}`);
+        for (const path of want.absent ?? []) {
+          const at = path.split(".").reduce((v, k) => v?.[k], got);
+          assert.equal(at, undefined, `${name}: ${path} is there`);
+        }
         if (want.notes !== undefined) assert.equal((got.notes ?? []).length, want.notes, name);
       }
       continue;

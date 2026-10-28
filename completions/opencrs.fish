@@ -53,6 +53,7 @@ complete -c opencrs -n "__fish_opencrs_using_subcommand fetch" -s h -l help -d '
 complete -c opencrs -n "__fish_opencrs_using_subcommand conformance" -l level -d 'Level to test: core, layout or full' -r
 complete -c opencrs -n "__fish_opencrs_using_subcommand conformance" -l cmd -d 'External validator to test' -r
 complete -c opencrs -n "__fish_opencrs_using_subcommand conformance" -s v -l verbose -d 'List passing cases too'
+complete -c opencrs -n "__fish_opencrs_using_subcommand conformance" -l no-strictest -d 'Skip the cases for optional strictest requirements'
 complete -c opencrs -n "__fish_opencrs_using_subcommand conformance" -s h -l help -d 'Show help (--help shows more)'
 complete -c opencrs -n "__fish_opencrs_using_subcommand completion" -s h -l help -d 'Show help (--help shows more)'
 complete -c opencrs -n "__fish_opencrs_using_subcommand version" -s h -l help -d 'Show help (--help shows more)'

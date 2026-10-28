@@ -1,6 +1,7 @@
 {
   "id": "layout-strictest-safe-area",
   "level": "layout",
+  "optional": "strictest",
   "spec": "Inheritance: Strictest requirements",
   "description": "Three screens of one format with different safe areas and blocked regions: the strictest safe area is the largest inset on each side, and the blocked regions are all of them, a region restated with another rectangle counting as another.",
   "specs": [

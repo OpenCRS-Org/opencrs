@@ -1,8 +1,9 @@
 {
   "id": "full-strictest-conditional",
   "level": "full",
+  "optional": "strictest",
   "spec": "Inheritance: Strictest requirements",
-  "description": "Legal text is required without a condition on every screen, so it is kept. A promo element required when the creative is tagged offer, and a legal element one screen requires when tagged alcohol, depend on the creative, so they are left out of the required elements and listed as left out.",
+  "description": "Legal text is required without a condition on every screen, so it is kept. A promo element required when the creative is tagged offer, and a legal element one screen requires when tagged alcohol, depend on the creative, so they are left out of the required elements; they are listed with their sizes (in pixels on each screen) and positions, for creative with those tags.",
   "specs": [
     "screens.json"
   ],
@@ -20,16 +21,24 @@
           ]
         },
         "min_cap_height_px": {
-          "legal": 12
+          "legal": 24
         },
         "conditional_elements_left_out": [
           {
             "role": "promo",
-            "when": "offer"
+            "when": "offer",
+            "min_cap_height_px": 60,
+            "within_rect_px": [
+              300,
+              300,
+              300,
+              300
+            ]
           },
           {
             "role": "legal",
-            "when": "alcohol"
+            "when": "alcohol",
+            "min_cap_height_px": 40
           }
         ]
       }

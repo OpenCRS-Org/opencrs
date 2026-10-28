@@ -40,6 +40,11 @@ pub struct Case {
     /// entry, in order, as a JSON array.
     #[serde(default)]
     pub strictest: Vec<ExpectedStrictest>,
+    /// The optional feature the case tests, such as `strictest`; empty for
+    /// a case every validator at its level must pass. A validator that
+    /// doesn't offer the feature is not tested on the case.
+    #[serde(default)]
+    pub optional: String,
     /// The case's directory; set by the loader, not read from JSON.
     #[serde(skip)]
     pub dir: PathBuf,
@@ -55,6 +60,9 @@ pub struct ExpectedStrictest {
     /// Numbers are equal if their values are.
     #[serde(default)]
     pub expect: serde_json::Value,
+    /// Members (dotted paths such as `media.motion`) the result must not have.
+    #[serde(default)]
+    pub absent: Vec<String>,
     /// How many `notes` the result must have; their wording is left to each
     /// validator. Absent means they aren't counted.
     #[serde(default)]
@@ -99,6 +107,11 @@ pub struct ExpectedCheck {
 impl Case {
     /// Whether the case belongs to a conformance level: a level includes every
     /// level before it. An unknown level sorts before all known ones, as in Go.
+    /// Whether the case is for an optional feature, not a conformance level.
+    pub fn is_optional(&self) -> bool {
+        !self.optional.is_empty()
+    }
+
     pub fn in_level(&self, level: &str) -> bool {
         rank(&self.level) <= rank(level)
     }
@@ -292,6 +305,10 @@ fn compare_strictest(c: &Case, output: &[u8]) -> Vec<String> {
     let mut problems = Vec::new();
     for (want, got) in c.strictest.iter().zip(&actual) {
         let r = &want.reference;
+        if want.expect.is_null() && want.notes.is_none() && want.error.is_empty() {
+            problems.push(format!("{r}: the case expects nothing of the result"));
+            continue;
+        }
         let err = got.get("error").and_then(|e| e.as_str());
         if !want.error.is_empty() {
             match err {
@@ -313,6 +330,15 @@ fn compare_strictest(c: &Case, output: &[u8]) -> Vec<String> {
             continue;
         }
         within(&want.expect, got, "", r, &mut problems);
+        for path in &want.absent {
+            let mut at = Some(got);
+            for k in path.split('.') {
+                at = at.and_then(|v| v.get(k));
+            }
+            if at.is_some() {
+                problems.push(format!("{r}: {path} is there, want it left out"));
+            }
+        }
         if let Some(n) = want.notes {
             let have = got
                 .get("notes")
@@ -525,6 +551,8 @@ mod tests {
             compare(&strictest_case(), good.as_bytes()),
             Vec::<String>::new()
         );
+        let empty: Case = serde_json::from_str(r#"{"strictest":[{"ref":"a/b/c"}]}"#).unwrap();
+        assert!(!compare(&empty, br#"[{"screens":1}]"#).is_empty());
         let bad = [
             ("count", r#"[{}]"#),
             ("not json", "oops"),

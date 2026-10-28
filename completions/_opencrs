@@ -78,6 +78,7 @@ _arguments "${_arguments_options[@]}" : \
 '--cmd=[External validator to test]:COMMAND:_default' \
 '-v[List passing cases too]' \
 '--verbose[List passing cases too]' \
+'--no-strictest[Skip the cases for optional strictest requirements]' \
 '-h[Show help (--help shows more)]' \
 '--help[Show help (--help shows more)]' \
 '::dir -- The conformance directory:_files' \

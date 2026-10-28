@@ -1,6 +1,7 @@
 {
   "id": "full-strictest-cap-height",
   "level": "full",
+  "optional": "strictest",
   "spec": "Inheritance: Strictest requirements",
   "description": "Minimum text sizes are worked out in pixels on each screen, at its own viewing distance, and the largest for each role is kept: a screen 8 m away needs 80 mm text, but one with twice the pixel density 5 m away needs 100 px, the more. A required element's size in millimetres is converted on each screen too.",
   "specs": [

@@ -201,7 +201,13 @@ def test_check_dir_passes_every_conformance_case(case_dir):
                     opencrs.resolve_strictest(specs[0], want["ref"])
                 continue
             got = opencrs.resolve_strictest(specs[0], want["ref"])
+            assert want.get("expect") is not None or "notes" in want, "the case expects nothing"
             within(want.get("expect"), got, want["ref"])
+            for path in want.get("absent", []):
+                at = got
+                for k in path.split("."):
+                    at = at.get(k) if isinstance(at, dict) else None
+                assert at is None, f"{path} is there"
             if "notes" in want:
                 assert len(got.get("notes", [])) == want["notes"], want["ref"]
         return

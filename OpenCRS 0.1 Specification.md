@@ -191,24 +191,26 @@ A screen also points to its venue, which is how centre-level rules (a landlord's
 
 ### Strictest requirements
 
-**One file for a whole format: the requirements of every screen a reference covers, combined so that a file that meets them passes on each of those screens.** A format reference covers each screen that uses the format; a screen reference covers that one screen, and its strictest requirements are its own. A validator combines them one limit at a time:
+**One file for a whole format: the requirements of every screen a reference covers, combined so that a file that meets them passes on each of those screens, except for the rule-pack limits listed in the result and anything its `notes` name.** A format reference covers each screen that uses the format; a screen reference covers that one screen, and its strictest requirements are its own.
+
+Offering strictest requirements is optional. A validator may, and if it does it follows the rules below; it claims support for them separately from its conformance level, and a validator without them still meets Core, Layout and Full. The conformance suite has its own cases for them, marked optional. A validator combines the screens one limit at a time:
 
 | Limit | Combined as |
 | --- | --- |
 | Safe area | The largest inset on each side, so the smallest safe rectangle. A screen with no safe area adds none |
 | Blocked regions | Every region any screen has, listed once |
 | Minimum text size | Each screen's minimum for a role, from `legibility` at that screen's own viewing distance and from required elements, converted to pixels on that screen. The largest for each role is kept, and a role with a minimum on any screen has one |
-| Required elements | The elements without a `when`, by role, with the overlap of their position limits. Elements with a `when` are left out and listed, since whether they apply depends on the creative |
+| Required elements | The elements without a `when`, by role, with the overlap of their position limits. Elements with a `when` are left out of the rules, since whether they apply depends on the creative, and listed with the size (in pixels) and the overlap of position limits they ask, for creative with that tag |
 | Maxima: `max_words` (as set or derived from dwell), `max_bytes`, `fps`, `slot_s`, `max_flash_hz`, brightness limits, `playback.max_transition_s` | The smallest |
 | Minima other than text size: `min_frame_hold_s`, `playback.min_dwell_s` | The largest |
-| Motion | Not allowed if any screen disallows it, in its rules or its `placement`; no flashing if any screen says so |
-| Restricted categories, rule packs, notes, rule conflicts | The union. Rule packs are listed, not combined: what a pack allows depends on each screen's placement |
-| File types and codecs | The intersection. A file type must be accepted by every screen, as static or as motion; a codec by every screen that lists codecs. A colour space must be the same on every screen that names one |
+| Motion | Not allowed if any screen disallows it, in its rules, its `placement` or a rule pack; no flashing, which is a flash limit of 0 Hz, if any screen says so. When motion is not allowed there are no motion file types |
+| Restricted categories, rule packs, notes, rule conflicts | The union. Where a pack's effect can be worked out for a screen (a ban on motion or flashing, and the words and text size for a glance at the screen's speed and viewing distance) it is folded into the limits above. The rest of what packs ask (playback, luminance and school-zone rules, and review for traffic-device imagery) is listed, not combined |
+| File types and codecs | The intersection. A file type must be accepted by every screen, as static or as motion; a codec by every screen that lists codecs. A type that any screen lists as motion is listed as motion, since that screen treats a file of that type as motion. A colour space must be the same on every screen that names one |
 | Pixels | Screens of a format share them. If the screens covered differ, there is no strictest requirement and the validator reports an error |
 | `physical_mm`, `segments` | Kept if every screen has the same value, otherwise left out |
 | Viewing | Not a limit: the nearest and farthest viewing distances, and the shortest dwell |
 
-Where no single file can pass everywhere, the field is left empty and the result says so in `notes`: no file type or codec is accepted by every screen, colour spaces differ, position limits don't overlap, or slot lengths differ (a motion file must run for the slot, so `slot_s` then holds the shortest). A minimum text size that can't be worked out on some screen is noted too. The result counts the `screens` covered and, in `sources`, names the screen that set each combined value (the first in the document if several tie), so a publisher can see which screen drives each limit.
+Where no single file can pass everywhere, the field is left empty and the result says so in `notes`: no file type or codec is accepted by every screen, colour spaces differ, position limits don't overlap, or slot lengths differ (a motion file must run for the slot, so `slot_s` then holds the shortest, taken over the screens where the file is motion). A minimum text size that can't be worked out is noted too, with the screens it concerns. The result counts the `screens` covered and, in `sources`, names the screen that set each combined value (the first in the document if several tie), so a publisher can see which screen drives each limit.
 
 ## Legibility
 
@@ -508,7 +510,7 @@ A public document can describe screens without locations; the matching partner d
 
 Publishers can start at Core in an afternoon from existing spec sheets, and add detail over time.
 
-**The conformance suite** turns this table into tests. It's a set of cases in the repository's `conformance/` folder: input documents plus the outcome the spec requires, each tagged with its level and the spec section it tests. A validator meets a level when it passes every case at that level and below. Reports must match on each result and on each finding's code and severity, and on its element and screens where a case gives them. Wording is left to each validator, and extra `info` findings are allowed. A validator in any language can be tested by an adapter that reads each case and prints the reports. Claims to be "OpenCRS-compliant" at a level should rest on passing the suite.
+**The conformance suite** turns this table into tests. It's a set of cases in the repository's `conformance/` folder: input documents plus the outcome the spec requires, each tagged with its level and the spec section it tests. A validator meets a level when it passes every case at that level and below. Reports must match on each result and on each finding's code and severity, and on its element and screens where a case gives them. Wording is left to each validator, and extra `info` findings are allowed. Cases for the optional strictest requirements are marked as such and are not part of any level. A validator in any language can be tested by an adapter that reads each case and prints the reports. Claims to be "OpenCRS-compliant" at a level should rest on passing the suite.
 
 **Governance**
 
