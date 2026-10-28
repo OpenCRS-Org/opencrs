@@ -1,10 +1,40 @@
 use crate::cli::ResolveArgs;
 use crate::io::read_file;
 use opencrs::resolve::parse_ref;
+use opencrs::strictest::Strictest;
 use opencrs::{decode_document, json};
 use std::io::Write;
 
+/// `resolve --strictest`: the screens are read a screen at a time, as the
+/// library's other callers read them.
+fn strictest(a: &ResolveArgs, stdout: &mut dyn Write, stderr: &mut dyn Write) -> i32 {
+    let raw = match read_file(&a.screens) {
+        Ok(raw) => raw,
+        Err((_, e)) => {
+            let _ = writeln!(stderr, "{}: {e}", a.screens);
+            return 2;
+        }
+    };
+    if let Err(e) = parse_ref(&a.reference) {
+        let _ = writeln!(stderr, "{e}");
+        return 2;
+    }
+    match opencrs::budget::ensure(raw.len(), || Strictest::from_text(&raw, &a.reference)) {
+        Ok(s) => {
+            let _ = stdout.write_all(&s.to_json_pretty());
+            0
+        }
+        Err(e) => {
+            let _ = writeln!(stderr, "{e}");
+            1
+        }
+    }
+}
+
 pub fn run(a: &ResolveArgs, stdout: &mut dyn Write, stderr: &mut dyn Write) -> i32 {
+    if a.strictest {
+        return strictest(a, stdout, stderr);
+    }
     let args = [&a.screens, &a.reference];
     let doc = read_file(args[0])
         .map_err(|(_, e)| e)

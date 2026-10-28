@@ -1,0 +1,94 @@
+{
+  "opencrs": "0.1",
+  "publisher": "conf.example",
+  "updated_at": "2026-10-20T09:00:00+11:00",
+  "expires_at": "2027-06-30T00:00:00+10:00",
+  "networks": [
+    {
+      "id": "n",
+      "name": "Strictest network",
+      "formats": [
+        {
+          "id": "f",
+          "pixels": [
+            1000,
+            2000
+          ],
+          "physical_mm": [
+            1000,
+            2000
+          ],
+          "media": {
+            "static": [
+              "image/png"
+            ],
+            "max_bytes": 1000
+          },
+          "safe_area": {
+            "top": 100,
+            "right": 40,
+            "bottom": 100,
+            "left": 40
+          },
+          "blocked_regions": [
+            {
+              "name": "network-logo",
+              "rect_px": [
+                800,
+                20,
+                160,
+                80
+              ]
+            }
+          ]
+        }
+      ],
+      "screens": [
+        {
+          "id": "A",
+          "format": "f"
+        },
+        {
+          "id": "B",
+          "format": "f",
+          "overrides": {
+            "safe_area": {
+              "top": 60,
+              "right": 80,
+              "bottom": 120,
+              "left": 40
+            },
+            "blocked_regions": [
+              {
+                "name": "clock",
+                "rect_px": [
+                  0,
+                  0,
+                  100,
+                  50
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "C",
+          "format": "f",
+          "overrides": {
+            "blocked_regions": [
+              {
+                "name": "network-logo",
+                "rect_px": [
+                  700,
+                  20,
+                  160,
+                  80
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

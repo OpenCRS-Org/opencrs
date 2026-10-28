@@ -39,6 +39,8 @@ pub(crate) enum Work {
     Views,
     /// Screens visited to answer a reference.
     Screens,
+    /// Kinds of screen folded into strictest requirements.
+    Strictest,
     /// A format's blocked regions rebuilt for a screen whose overrides
     /// change them.
     Overrides,
@@ -288,6 +290,12 @@ fn describe(
         ),
         Work::Views => format!(
             "{} screen views were built for {label}{} ({} units).",
+            num(calls),
+            at(&path),
+            num(units)
+        ),
+        Work::Strictest => format!(
+            "{} kinds of screen were combined into the strictest requirements for {label}{} ({} units).",
             num(calls),
             at(&path),
             num(units)

@@ -88,6 +88,24 @@ def test_resolve_errors_raise_with_the_cores_message():
     assert str(e.value) == 'network "nope" not found in harbourline.example'
 
 
+def test_resolve_strictest_combines_the_screens_of_a_format():
+    s = opencrs.resolve_strictest(spec(), "harbourline.example/retail/portrait-totem-75")
+    assert s["screens"] == 2
+    assert s["ref"] == "harbourline.example/retail/portrait-totem-75"
+    # The farther totem sets the text size.
+    assert s["min_cap_height_px"]["headline"] == 77
+    assert s["sources"]["min_cap_height_px.headline"] == "HC-L1-002"
+    one = opencrs.resolve_strictest(spec(), "harbourline.example/retail/screen/HC-L1-002")
+    assert one["screens"] == 1
+    assert one["min_cap_height_px"] == s["min_cap_height_px"]
+
+
+def test_resolve_strictest_errors_raise_with_the_cores_message():
+    with pytest.raises(opencrs.OpenCRSError) as e:
+        opencrs.resolve_strictest(spec(), "a/b")
+    assert str(e.value) == '"a/b" is not a format or screen reference'
+
+
 def test_probe_reads_a_files_own_header():
     path = HARBOURLINE / "lunch-portrait.png"
     p = opencrs.probe(path)
@@ -155,10 +173,38 @@ def test_check_keeps_the_offset_of_now_and_defaults_to_host_time():
 CASES = sorted((ROOT / "conformance" / "0.1" / "cases").iterdir())
 
 
+def within(want, got, at=""):
+    """What a strictest case expects: objects by the members it gives, lists exactly."""
+    if want is None:
+        return
+    if isinstance(want, dict):
+        assert isinstance(got, dict), f"{at}: {got!r}"
+        for k, v in want.items():
+            assert k in got, f"{at}.{k} is missing"
+            within(v, got[k], f"{at}.{k}")
+    elif isinstance(want, list):
+        assert isinstance(got, list) and len(got) == len(want), f"{at}: {got!r}, want {want!r}"
+        for i, (w, g) in enumerate(zip(want, got)):
+            within(w, g, f"{at}[{i}]")
+    else:
+        assert got == want, f"{at}: {got!r}, want {want!r}"
+
+
 @pytest.mark.parametrize("case_dir", CASES, ids=[c.name for c in CASES])
 def test_check_dir_passes_every_conformance_case(case_dir):
     c = json.loads((case_dir / "case.json").read_text())
     specs = [(case_dir / s).read_text() for s in c["specs"]]
+    if c.get("strictest"):
+        for want in c["strictest"]:
+            if want.get("error"):
+                with pytest.raises(opencrs.OpenCRSError, match=want["error"]):
+                    opencrs.resolve_strictest(specs[0], want["ref"])
+                continue
+            got = opencrs.resolve_strictest(specs[0], want["ref"])
+            within(want.get("expect"), got, want["ref"])
+            if "notes" in want:
+                assert len(got.get("notes", [])) == want["notes"], want["ref"]
+        return
     manifest = (case_dir / c["creative"]).read_text()
     reports = opencrs.check_dir(case_dir, specs, manifest, c["now"])["reports"]
     assert len(reports) == len(c["expect"])

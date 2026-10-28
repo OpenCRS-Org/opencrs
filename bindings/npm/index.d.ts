@@ -95,6 +95,36 @@ export interface Requirements {
  */
 export function resolve(spec: string, ref: string): Requirements[];
 
+/**
+ * The requirements for everything a reference covers, combined so that a file
+ * that meets them passes on every screen. `sources` names the screen that set
+ * each value; `notes` says where no single file can pass everywhere.
+ */
+export interface StrictestRequirements {
+  ref: string;
+  screens: number;
+  format: string;
+  pixels: [number, number];
+  physical_mm?: [number, number];
+  media: Record<string, unknown>;
+  safe_area?: { top: number; right: number; bottom: number; left: number };
+  blocked_regions?: Region[];
+  segments?: Record<string, unknown>[];
+  viewing?: Record<string, unknown>;
+  min_cap_height_px?: Record<string, number>;
+  rules: Record<string, unknown>;
+  conditional_elements_left_out?: { role: string; when: string }[];
+  notes?: string[];
+  sources: Record<string, string>;
+}
+
+/**
+ * Combines the screens a `<publisher>/<network>/<format>` or screen
+ * reference covers into one set of requirements. Throws `Error` if the spec
+ * or the reference is bad, or the screens differ in pixels.
+ */
+export function resolveStrictest(spec: string, ref: string): StrictestRequirements;
+
 export type Outcome = "pass" | "warn" | "fail" | "incomplete";
 
 export interface Report {

@@ -171,6 +171,38 @@ fn resolve_errors() {
 }
 
 #[test]
+fn resolve_strictest_command() {
+    let screens = ex("retail.screens.json");
+    let (code, out, err) = run_cli(&[
+        "resolve",
+        "--strictest",
+        &screens,
+        "harbourline.example/retail/portrait-totem-75",
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let got: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(got["screens"], 2, "{out}");
+    assert_eq!(got["min_cap_height_px"]["headline"], 77, "{out}");
+    assert_eq!(
+        got["sources"]["min_cap_height_px.headline"], "HC-L1-002",
+        "{out}"
+    );
+    let (code, _, err) = run_cli(&[
+        "resolve",
+        "--strictest",
+        &screens,
+        "harbourline.example/retail/nope",
+    ]);
+    assert_eq!(code, 1);
+    assert_eq!(err, "format \"nope\" not found in network \"retail\"\n");
+    let (code, _, err) = run_cli(&["resolve", "--strictest", &screens, "x"]);
+    assert_eq!(code, 2);
+    assert_eq!(err, "\"x\" is not a format or screen reference\n");
+    let (code, _, _) = run_cli(&["resolve", "--strictest", "missing.json", "a.example/n/f"]);
+    assert_eq!(code, 2);
+}
+
+#[test]
 fn usage_errors() {
     for args in [
         vec![],
@@ -394,7 +426,7 @@ fn conformance_passes_full_level() {
     assert_eq!(code, 0, "{out}{err}");
     assert_eq!(
         out,
-        "the reference validator conforms at the Full level: 48 of 48 cases pass\n"
+        "the reference validator conforms at the Full level: 55 of 55 cases pass\n"
     );
     let (code, out, _) = run_cli(&["conformance", "-level", "core", "-v", dir.to_str().unwrap()]);
     assert_eq!(code, 0);
@@ -460,7 +492,7 @@ fn conformance_reports_failing_cases() {
     assert!(out.contains("\n      "), "{out}");
     assert!(
         out.ends_with(
-            "the reference validator does not conform at the Full level: 47 of 48 cases pass\n"
+            "the reference validator does not conform at the Full level: 54 of 55 cases pass\n"
         ),
         "{out}"
     );

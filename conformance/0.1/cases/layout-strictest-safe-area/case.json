@@ -1,0 +1,64 @@
+{
+  "id": "layout-strictest-safe-area",
+  "level": "layout",
+  "spec": "Inheritance: Strictest requirements",
+  "description": "Three screens of one format with different safe areas and blocked regions: the strictest safe area is the largest inset on each side, and the blocked regions are all of them, a region restated with another rectangle counting as another.",
+  "specs": [
+    "screens.json"
+  ],
+  "strictest": [
+    {
+      "ref": "conf.example/n/f",
+      "notes": 0,
+      "expect": {
+        "screens": 3,
+        "format": "f",
+        "pixels": [
+          1000,
+          2000
+        ],
+        "safe_area": {
+          "top": 100,
+          "right": 80,
+          "bottom": 120,
+          "left": 40
+        },
+        "blocked_regions": [
+          {
+            "name": "network-logo",
+            "rect_px": [
+              800,
+              20,
+              160,
+              80
+            ]
+          },
+          {
+            "name": "clock",
+            "rect_px": [
+              0,
+              0,
+              100,
+              50
+            ]
+          },
+          {
+            "name": "network-logo",
+            "rect_px": [
+              700,
+              20,
+              160,
+              80
+            ]
+          }
+        ],
+        "sources": {
+          "safe_area.top": "A",
+          "safe_area.right": "B",
+          "safe_area.bottom": "B",
+          "safe_area.left": "A"
+        }
+      }
+    }
+  ]
+}

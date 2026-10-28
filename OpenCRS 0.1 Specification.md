@@ -189,6 +189,27 @@ A screen also points to its venue, which is how centre-level rules (a landlord's
   - `remove` is only for items that aren't regulatory: inherited required elements, and blocked regions in `overrides`.
 - A screen's `overrides.rules` is merged as format-level rules, so it can only tighten too.
 
+### Strictest requirements
+
+**One file for a whole format: the requirements of every screen a reference covers, combined so that a file that meets them passes on each of those screens.** A format reference covers each screen that uses the format; a screen reference covers that one screen, and its strictest requirements are its own. A validator combines them one limit at a time:
+
+| Limit | Combined as |
+| --- | --- |
+| Safe area | The largest inset on each side, so the smallest safe rectangle. A screen with no safe area adds none |
+| Blocked regions | Every region any screen has, listed once |
+| Minimum text size | Each screen's minimum for a role, from `legibility` at that screen's own viewing distance and from required elements, converted to pixels on that screen. The largest for each role is kept, and a role with a minimum on any screen has one |
+| Required elements | The elements without a `when`, by role, with the overlap of their position limits. Elements with a `when` are left out and listed, since whether they apply depends on the creative |
+| Maxima: `max_words` (as set or derived from dwell), `max_bytes`, `fps`, `slot_s`, `max_flash_hz`, brightness limits, `playback.max_transition_s` | The smallest |
+| Minima other than text size: `min_frame_hold_s`, `playback.min_dwell_s` | The largest |
+| Motion | Not allowed if any screen disallows it, in its rules or its `placement`; no flashing if any screen says so |
+| Restricted categories, rule packs, notes, rule conflicts | The union. Rule packs are listed, not combined: what a pack allows depends on each screen's placement |
+| File types and codecs | The intersection. A file type must be accepted by every screen, as static or as motion; a codec by every screen that lists codecs. A colour space must be the same on every screen that names one |
+| Pixels | Screens of a format share them. If the screens covered differ, there is no strictest requirement and the validator reports an error |
+| `physical_mm`, `segments` | Kept if every screen has the same value, otherwise left out |
+| Viewing | Not a limit: the nearest and farthest viewing distances, and the shortest dwell |
+
+Where no single file can pass everywhere, the field is left empty and the result says so in `notes`: no file type or codec is accepted by every screen, colour spaces differ, position limits don't overlap, or slot lengths differ (a motion file must run for the slot, so `slot_s` then holds the shortest). A minimum text size that can't be worked out on some screen is noted too. The result counts the `screens` covered and, in `sources`, names the screen that set each combined value (the first in the document if several tie), so a publisher can see which screen drives each limit.
+
 ## Legibility
 
 **This is what no existing spec has: minimum text size worked out from how far away people are and how long they look, not just a pixel count.** It's why `physical_mm` and `viewing` matter.

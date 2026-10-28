@@ -34,9 +34,35 @@ pub struct Case {
     pub creative: String,
     #[serde(default)]
     pub expect: Vec<ExpectedReport>,
+    /// For a case about strictest requirements instead of a creative: the
+    /// references to resolve in `specs[0]`, and what each must give. Such a
+    /// case has no `creative`, and the validator prints one result for each
+    /// entry, in order, as a JSON array.
+    #[serde(default)]
+    pub strictest: Vec<ExpectedStrictest>,
     /// The case's directory; set by the loader, not read from JSON.
     #[serde(skip)]
     pub dir: PathBuf,
+}
+
+/// What resolving a reference for its strictest requirements must give.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ExpectedStrictest {
+    #[serde(rename = "ref", default)]
+    pub reference: String,
+    /// Members the result must have, with these values: objects are matched
+    /// by their members (others are not looked at), everything else exactly.
+    /// Numbers are equal if their values are.
+    #[serde(default)]
+    pub expect: serde_json::Value,
+    /// How many `notes` the result must have; their wording is left to each
+    /// validator. Absent means they aren't counted.
+    #[serde(default)]
+    pub notes: Option<usize>,
+    /// Instead of a result, the error: the result must be `{"error": text}`
+    /// with text containing this.
+    #[serde(default)]
+    pub error: String,
 }
 
 /// The part of a validation report a validator must get right.
@@ -170,6 +196,9 @@ impl From<ActualReport> for Report {
 /// - Any other error, warning or not_checked finding is a failure. Extra info
 ///   findings are allowed.
 pub fn compare(c: &Case, output: &[u8]) -> Vec<String> {
+    if !c.strictest.is_empty() {
+        return compare_strictest(c, output);
+    }
     let actual: Vec<Report> =
         match serde_json::from_slice::<Option<Vec<Option<ActualReport>>>>(output) {
             Ok(v) => v
@@ -243,6 +272,98 @@ pub fn compare(c: &Case, output: &[u8]) -> Vec<String> {
         }
     }
     problems
+}
+
+/// Checks a validator's strictest results against a case: one for each
+/// entry, in order, each either containing what is expected or being the
+/// expected error.
+fn compare_strictest(c: &Case, output: &[u8]) -> Vec<String> {
+    let actual: Vec<serde_json::Value> = match serde_json::from_slice(output) {
+        Ok(v) => v,
+        Err(e) => return vec![format!("output isn't a JSON array of results: {e}")],
+    };
+    if actual.len() != c.strictest.len() {
+        return vec![format!(
+            "{} results, want {}",
+            actual.len(),
+            c.strictest.len()
+        )];
+    }
+    let mut problems = Vec::new();
+    for (want, got) in c.strictest.iter().zip(&actual) {
+        let r = &want.reference;
+        let err = got.get("error").and_then(|e| e.as_str());
+        if !want.error.is_empty() {
+            match err {
+                Some(e) if e.contains(&want.error) => {}
+                Some(e) => problems.push(format!(
+                    "{r}: error {}, want one containing {}",
+                    quote(e),
+                    quote(&want.error)
+                )),
+                None => problems.push(format!(
+                    "{r}: no error, want one containing {}",
+                    quote(&want.error)
+                )),
+            }
+            continue;
+        }
+        if let Some(e) = err {
+            problems.push(format!("{r}: error {}", quote(e)));
+            continue;
+        }
+        within(&want.expect, got, "", r, &mut problems);
+        if let Some(n) = want.notes {
+            let have = got
+                .get("notes")
+                .and_then(|n| n.as_array())
+                .map_or(0, Vec::len);
+            if have != n {
+                problems.push(format!("{r}: {have} notes, want {n}"));
+            }
+        }
+    }
+    problems
+}
+
+/// Whether `got` holds what `want` says, adding to `problems` where not.
+fn within(
+    want: &serde_json::Value,
+    got: &serde_json::Value,
+    at: &str,
+    r: &str,
+    problems: &mut Vec<String>,
+) {
+    use serde_json::Value::{Array, Null, Number, Object};
+    let here = if at.is_empty() { "the result" } else { at };
+    match (want, got) {
+        (Null, _) => {}
+        (Object(w), Object(g)) => {
+            for (k, wv) in w {
+                let path = if at.is_empty() {
+                    k.clone()
+                } else {
+                    format!("{at}.{k}")
+                };
+                match g.get(k) {
+                    Some(gv) => within(wv, gv, &path, r, problems),
+                    None => problems.push(format!("{r}: {path} is missing, want {wv}")),
+                }
+            }
+        }
+        (Array(w), Array(g)) => {
+            if w.len() != g.len() {
+                problems.push(format!("{r}: {here} is {got}, want {want}"));
+                return;
+            }
+            for (i, (wv, gv)) in w.iter().zip(g).enumerate() {
+                within(wv, gv, &format!("{at}[{i}]"), r, problems);
+            }
+        }
+        (Number(w), Number(g)) if w.as_f64() == g.as_f64() => {}
+        (w, g) if w == g => {}
+        (w, g) => problems.push(format!("{r}: {here} is {g}, want {w}")),
+    }
 }
 
 fn describe(code: &str, severity: &str, element: &str, screens: &[String]) -> String {
@@ -385,6 +506,56 @@ mod tests {
         assert!(compare(&c, out.as_bytes()).is_empty());
         let dup = r#"[{"file":"a.png","target":"p.example/n/f","result":"fail","checks":[{"code":"CRS-LEGIBILITY","severity":"error","screens":["S2","S1"]},{"code":"CRS-LEGIBILITY","severity":"error","screens":["S2","S1"]}]}]"#;
         assert_eq!(compare(&c, dup.as_bytes()).len(), 1);
+    }
+
+    fn strictest_case() -> Case {
+        serde_json::from_str(
+            r#"{"id":"full-x","strictest":[
+              {"ref":"p.example/n/f","notes":1,"expect":{"screens":2,"safe_area":{"top":5},"media":{"static":[]}}},
+              {"ref":"p.example/n/g","error":"pixel"}]}"#,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn strictest_results_are_matched_by_what_the_case_gives() {
+        let good = r#"[{"screens":2.0,"extra":1,"notes":["any wording"],"safe_area":{"top":5,"left":1},"media":{"static":[]}},
+            {"error":"different pixel sizes"}]"#;
+        assert_eq!(
+            compare(&strictest_case(), good.as_bytes()),
+            Vec::<String>::new()
+        );
+        let bad = [
+            ("count", r#"[{}]"#),
+            ("not json", "oops"),
+            (
+                "value",
+                r#"[{"screens":3,"notes":["x"],"safe_area":{"top":5},"media":{"static":[]}},{"error":"pixel"}]"#,
+            ),
+            (
+                "missing",
+                r#"[{"screens":2,"notes":["x"],"media":{"static":[]}},{"error":"pixel"}]"#,
+            ),
+            (
+                "list",
+                r#"[{"screens":2,"notes":["x"],"safe_area":{"top":5},"media":{"static":["a"]}},{"error":"pixel"}]"#,
+            ),
+            (
+                "notes",
+                r#"[{"screens":2,"safe_area":{"top":5},"media":{"static":[]}},{"error":"pixel"}]"#,
+            ),
+            (
+                "error wanted",
+                r#"[{"screens":2,"notes":["x"],"safe_area":{"top":5},"media":{"static":[]}},{"screens":1}]"#,
+            ),
+            ("error unwanted", r#"[{"error":"no"},{"error":"pixel"}]"#),
+        ];
+        for (name, out) in bad {
+            assert!(
+                !compare(&strictest_case(), out.as_bytes()).is_empty(),
+                "{name}: should fail"
+            );
+        }
     }
 
     #[test]

@@ -39,7 +39,12 @@ fn cases_are_well_formed() {
             "{}: needs spec and description",
             c.id
         );
-        for name in c.specs.iter().chain([&c.creative]) {
+        for name in c
+            .specs
+            .iter()
+            .chain([&c.creative])
+            .filter(|n| !n.is_empty())
+        {
             let raw = std::fs::read(c.dir.join(name)).unwrap_or_else(|e| panic!("{}: {e}", c.id));
             let res = lint(&raw, None::<Kind>, &SchemaOptions::default())
                 .unwrap_or_else(|e| panic!("{}/{name}: {e}", c.id));

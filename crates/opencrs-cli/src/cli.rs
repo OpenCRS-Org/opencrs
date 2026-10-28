@@ -149,12 +149,15 @@ pub enum Cmd {
         long_about = "Show the requirements for a format or a screen\n\n\
             Prints the requirements that apply to one format or one screen after \
             inheritance (publisher, network, venue, format, screen) as JSON. A reference \
-            is <publisher>/<network>/<format> or <publisher>/<network>/screen/<id>.",
+            is <publisher>/<network>/<format> or <publisher>/<network>/screen/<id>.\n\n\
+            With --strictest, prints one set of requirements instead, the strictest of every \
+            screen the reference covers: a file that meets it passes on all of them.",
         after_help = exit_status!(exit_resolve!()),
         after_long_help = concat!(
             examples!(
                 "opencrs resolve retail.screens.json harbourline.example/retail/portrait-totem-75",
                 "opencrs resolve retail.screens.json harbourline.example/retail/screen/HC-L1-002",
+                "opencrs resolve --strictest retail.screens.json harbourline.example/retail/portrait-totem-75",
             ),
             "\n\n",
             exit_status!(exit_resolve!()),
@@ -191,7 +194,8 @@ pub enum Cmd {
             Runs the cases in the conformance directory against this tool's own validator, \
             or against another validator given with --cmd. The command is run through the \
             shell with each case directory as its last argument and must print the reports \
-            as a JSON array.",
+            as a JSON array, or for a case with strictest expectations, the strictest \
+            requirements of each as a JSON array.",
         after_help = exit_status!(exit_conformance!()),
         after_long_help = concat!(
             examples!(
@@ -306,6 +310,17 @@ pub struct ResolveArgs {
             <publisher>/<network>/screen/<id>."
     )]
     pub reference: String,
+    /// Combine every screen the reference covers into one set of requirements
+    #[arg(
+        long,
+        long_help = "Combine every screen the reference covers into one set of \
+            requirements that a file can meet to pass on all of them: the largest safe-area \
+            insets, the union of blocked regions, the largest minimum text size in pixels \
+            for each role, the smallest maximums, and the file types every screen accepts. \
+            `sources` names the screen that set each value and `notes` says where no single \
+            file can pass everywhere."
+    )]
+    pub strictest: bool,
 }
 
 #[derive(Args)]

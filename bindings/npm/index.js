@@ -12,4 +12,5 @@ module.exports = {
   check: native.check,
   checkDir: native.checkDir,
   resolve: native.resolve,
+  resolveStrictest: native.resolveStrictest,
 };

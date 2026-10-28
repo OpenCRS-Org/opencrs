@@ -54,6 +54,7 @@ Register-ArgumentCompleter -Native -CommandName 'opencrs' -ScriptBlock {
             break
         }
         'opencrs;resolve' {
+            [CompletionResult]::new('--strictest', '--strictest', [CompletionResultType]::ParameterName, 'Combine every screen the reference covers into one set of requirements')
             [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Show help (--help shows more)')
             [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Show help (--help shows more)')
             break

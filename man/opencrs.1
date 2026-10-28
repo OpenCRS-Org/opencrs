@@ -96,9 +96,14 @@ Show the requirements for a format or a screen.
 .PP
 Prints the requirements that apply to one format or one screen after inheritance (publisher, network, venue, format, screen) as JSON. A reference is <publisher>/<network>/<format> or <publisher>/<network>/screen/<id>.
 .PP
-\fBopencrs resolve\fR <SCREENS> <REF>
+With \-\-strictest, prints one set of requirements instead, the strictest of every screen the reference covers: a file that meets it passes on all of them.
+.PP
+\fBopencrs resolve\fR [OPTIONS] <SCREENS> <REF>
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
+.TP
+\fB\-\-strictest\fR
+Combine every screen the reference covers into one set of requirements that a file can meet to pass on all of them: the largest safe\-area insets, the union of blocked regions, the largest minimum text size in pixels for each role, the smallest maximums, and the file types every screen accepts. `sources` names the screen that set each value and `notes` says where no single file can pass everywhere.
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Show help (\-\-help shows more)
@@ -143,7 +148,7 @@ A publisher\*(Aqs domain, or the URL of one document
 .SS "opencrs conformance"
 Run the conformance suite against a validator.
 .PP
-Runs the cases in the conformance directory against this tool\*(Aqs own validator, or against another validator given with \-\-cmd. The command is run through the shell with each case directory as its last argument and must print the reports as a JSON array.
+Runs the cases in the conformance directory against this tool\*(Aqs own validator, or against another validator given with \-\-cmd. The command is run through the shell with each case directory as its last argument and must print the reports as a JSON array, or for a case with strictest expectations, the strictest requirements of each as a JSON array.
 .PP
 \fBopencrs conformance\fR [OPTIONS] [DIR]
 .ie \n(.g .ds Aq \(aq

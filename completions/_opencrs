@@ -53,6 +53,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (resolve)
 _arguments "${_arguments_options[@]}" : \
+'--strictest[Combine every screen the reference covers into one set of requirements]' \
 '-h[Show help (--help shows more)]' \
 '--help[Show help (--help shows more)]' \
 ':screens -- The screens.json to read:_default' \

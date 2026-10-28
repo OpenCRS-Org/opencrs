@@ -26,6 +26,7 @@ pub mod resolve;
 pub mod rulepack;
 pub mod schema;
 pub mod stream;
+pub mod strictest;
 #[cfg(test)]
 mod testutil;
 

@@ -1,0 +1,43 @@
+{
+  "id": "full-strictest-cap-height",
+  "level": "full",
+  "spec": "Inheritance: Strictest requirements",
+  "description": "Minimum text sizes are worked out in pixels on each screen, at its own viewing distance, and the largest for each role is kept: a screen 8 m away needs 80 mm text, but one with twice the pixel density 5 m away needs 100 px, the more. A required element's size in millimetres is converted on each screen too.",
+  "specs": [
+    "screens.json"
+  ],
+  "strictest": [
+    {
+      "ref": "conf.example/n/f",
+      "notes": 0,
+      "expect": {
+        "screens": 3,
+        "min_cap_height_px": {
+          "headline": 100,
+          "cta": 100,
+          "legal": 30,
+          "disclaimer": 30,
+          "logo": 40
+        },
+        "viewing": {
+          "distance_m": [
+            1,
+            8
+          ]
+        },
+        "rules": {
+          "required_elements": [
+            {
+              "role": "logo"
+            }
+          ]
+        },
+        "sources": {
+          "min_cap_height_px.headline": "C",
+          "min_cap_height_px.legal": "C",
+          "min_cap_height_px.logo": "C"
+        }
+      }
+    }
+  ]
+}

@@ -106,7 +106,7 @@ Every [release](https://github.com/OpenCRS-Org/opencrs/releases) has archives fo
 | --- | --- |
 | `opencrs check --spec SCREENS CREATIVE` | Checks each file a `creative.json` lists against every screen it targets. Repeat `--spec` for several publishers; `--json` prints reports in the spec's format. |
 | `opencrs schema FILE…` | Checks documents against the JSON Schemas, plus screens that name a missing format (`CRS-REFERENCE`) and rules inheritance has made impossible (`CRS-RULE-CONFLICT`). |
-| `opencrs resolve SCREENS REF` | Shows what one format or screen requires after inheritance, with minimum text sizes in mm and px and the word limit. |
+| `opencrs resolve SCREENS REF` | Shows what one format or screen requires after inheritance, with minimum text sizes in mm and px and the word limit. With `--strictest`, shows one set of requirements for everything the reference covers, so a single file passes on every screen. |
 | `opencrs fetch DOMAIN` | Reads a publisher's index, fetches its documents, follows delegates, and says which to trust and why. `--output DIR` saves the trusted ones. |
 | `opencrs conformance` | Runs the conformance suite against this validator, or against any other with `--cmd`. |
 | `opencrs completion SHELL` | Prints completions for bash, zsh, fish or PowerShell. |

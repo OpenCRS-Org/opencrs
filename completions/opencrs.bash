@@ -154,7 +154,7 @@ _opencrs() {
             return 0
             ;;
         opencrs__subcmd__resolve)
-            opts="-h --help"
+            opts="-h --strictest --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
