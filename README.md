@@ -41,7 +41,7 @@
 
 ---
 
-A media owner's spec sheet is a PDF. Every agency, studio and tool reads it by eye, and creative still comes back wrong: the logo sits under the screen's own branding, the legal line is too small to read from the street, the video is two seconds too long. OpenCRS turns the spec sheet into data that a publisher hosts once and every tool can check against.
+A media owner's spec sheet is a PDF. Every agency, studio and tool reads it by eye, and creative still comes back wrong: the logo sits under the screen's own branding, the legal line is too small to read from the street, the video is two seconds too long. OpenCRS™ turns the spec sheet into data that a publisher hosts once and every tool can check against.
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'primaryColor':'#F1EFFE','primaryBorderColor':'#5B4CF0','primaryTextColor':'#121216','lineColor':'#6B6B76','clusterBkg':'#F7F7F4','clusterBorder':'#D9D9E0','edgeLabelBackground':'#FFFFFF','fontFamily':'Inter, system-ui, sans-serif'}}}%%
@@ -266,3 +266,5 @@ OpenCRS is a draft, and it gets better with real spec sheets and real creative. 
 ## Licence
 
 The specification is [CC BY 4.0](LICENSE-SPEC). Everything else, including the JSON Schemas, examples and code, is [Apache 2.0](LICENSE). Anyone can implement OpenCRS, including competitors, as the spec's governance section intends.
+
+The licences don't cover the name. OpenCRS™ is a trademark: anyone may say they support OpenCRS, but a modified version can't use the name. See the [trademark policy](https://opencrs.dev/trademark/).
