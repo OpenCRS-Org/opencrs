@@ -2,6 +2,7 @@ package opencrs
 
 import (
 	"fmt"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -132,4 +133,55 @@ func TestComplexDocumentStopsWithAReason(t *testing.T) {
 	if !strings.Contains(found.Message, "2,000 required elements") || !strings.Contains(found.Message, "/networks/0/rules/required_elements") {
 		t.Errorf("the reason doesn't say where the work came from: %s", found.Message)
 	}
+}
+
+// The strictest requirements of a format of 190,000 screens come back in
+// about the time of a plain resolve, within the memory cap: each kind of
+// screen is combined once, not each screen.
+func TestResolveStrictestLargeFormat(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds and resolves a 50 MB document")
+	}
+	doc := bigScreens(true)
+	ref := "big.example/net/fmt-0"
+	// The same call ResolveStrictest makes, on an instance kept to read how
+	// far its memory grew: it only grows, so its size is the peak.
+	in, err := newInstance()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer in.close()
+	in.dirty = true
+	start := time.Now()
+	resp, err := in.callDocs("opencrs_resolve_strictest", map[string]any{"ref": ref}, doc)
+	took := time.Since(start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var res StrictestRequirements
+	if err := decode(resp, &res); err != nil {
+		t.Fatal(err)
+	}
+	peak := in.mod.Memory().Size()
+	load, _ := exec.Command("sysctl", "-n", "vm.loadavg").Output()
+	t.Logf("resolve strictest, %d bytes in, %d bytes out: %v, module memory %d MiB, load %s",
+		len(doc), len(resp), took, peak>>20, strings.TrimSpace(string(load)))
+	if res.Screens != 190000 || res.Format != "fmt-0" || res.Pixels != [2]int{1080, 1920} {
+		t.Fatalf("got %d screens of %q, %v", res.Screens, res.Format, res.Pixels)
+	}
+	// Screens differ by venue only, which no limit depends on: the answer is
+	// that of the format, from the first screen.
+	if res.Viewing == nil || res.Viewing.DistanceM == nil || *res.Viewing.DistanceM != [2]float64{2, 6} {
+		t.Errorf("viewing %+v", res.Viewing)
+	}
+	if res.Sources["pixels"] != "S-0000000" {
+		t.Errorf("sources %v", res.Sources)
+	}
+	if peak > maxMemoryPages*65536 {
+		t.Errorf("module memory %d is over the cap", peak)
+	}
+	if took > 5*time.Second {
+		t.Errorf("took %v", took)
+	}
+	in.dirty = false
 }

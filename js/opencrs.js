@@ -8,6 +8,7 @@
 //   crs.lint(text);                      // text or UTF-8 bytes; JSON string
 //   await crs.check([specText], creativeText, files, now); // JSON string
 //   crs.resolve(specText, ref);                       // JSON string
+//   crs.resolveStrictest(specText, ref);              // JSON string
 //   crs.legibility({ distance_m: [2, 6] });           // JSON string
 //   crs.dwell({ speed_kmh: 80, distance_m: [20, 150] }); // JSON string
 //
@@ -177,6 +178,18 @@ export async function load(source) {
     resolve(spec, ref) {
       try {
         return callFramed("opencrs_resolve", { ref }, [spec]);
+      } catch (e) {
+        return errorJSON(e);
+      }
+    },
+    /**
+     * resolveStrictest(spec, ref) returns one set of requirements for
+     * everything a format or screen reference covers: a file that meets it
+     * passes on every one of those screens.
+     */
+    resolveStrictest(spec, ref) {
+      try {
+        return callFramed("opencrs_resolve_strictest", { ref }, [spec]);
       } catch (e) {
         return errorJSON(e);
       }

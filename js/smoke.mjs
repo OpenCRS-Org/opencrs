@@ -24,7 +24,7 @@ const compiled = new WebAssembly.Module(wasmBytes);
 assert.equal(WebAssembly.Module.imports(compiled).length, 0, "the module must have no imports");
 const exported = WebAssembly.Module.exports(compiled).map((e) => e.name).sort();
 for (const name of ["memory", "opencrs_alloc", "opencrs_free", "opencrs_version", "opencrs_lint",
-  "opencrs_check", "opencrs_resolve", "opencrs_probe_start", "opencrs_probe_feed",
+  "opencrs_check", "opencrs_resolve", "opencrs_resolve_strictest", "opencrs_probe_start", "opencrs_probe_feed",
   "opencrs_legibility", "opencrs_dwell", "opencrs_rule_packs", "opencrs_publisher"]) {
   assert.ok(exported.includes(name), `missing export ${name}`);
 }
@@ -162,6 +162,23 @@ if (CHECK_PENDING) {
   assert.deepEqual(totem.map((g) => g.screens), [["HC-L1-001"], ["HC-L1-002"]]);
   assert.equal(totem[0].screen, undefined, "a group names its screens in `screens`");
   assert.ok(Array.isArray(resolved) && resolved.length === 2);
+}
+
+// The strictest requirements of a format are its screens' combined, and of a
+// screen its own; screens that differ in pixels have none.
+{
+  const t = "harbourline.example/retail/portrait-totem-75";
+  const strictest = JSON.parse(api.resolveStrictest(screens, t));
+  assert.equal(strictest.ref, t);
+  assert.equal(strictest.screens, 2);
+  // The farther totem (3-10 m) sets the text size: the spec's 77 px.
+  assert.equal(strictest.min_cap_height_px.headline, 77);
+  assert.equal(strictest.sources["min_cap_height_px.headline"], "HC-L1-002");
+  const one = JSON.parse(api.resolveStrictest(screens, "harbourline.example/retail/screen/HC-L1-002"));
+  assert.equal(one.screens, 1);
+  assert.deepEqual(one.min_cap_height_px, strictest.min_cap_height_px);
+  assert.ok(JSON.parse(api.resolveStrictest(screens, "nonsense")).error);
+  assert.ok(JSON.parse(api.resolveStrictest("{}", t)).error);
 }
 
 // The calculators give the spec's worked examples.

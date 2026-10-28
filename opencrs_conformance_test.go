@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"sort"
 	"strings"
@@ -23,7 +24,17 @@ type ccase struct {
 	Specs    []string  `json:"specs"`
 	Creative string    `json:"creative"`
 	Expect   []creport `json:"expect"`
-	dir      string
+	// Strictest, for a case about strictest requirements, is the references
+	// to resolve in Specs[0] and what each must give.
+	Strictest []cstrictest `json:"strictest"`
+	dir       string
+}
+
+type cstrictest struct {
+	Ref    string          `json:"ref"`
+	Expect json.RawMessage `json:"expect"`
+	Notes  *int            `json:"notes"`
+	Error  string          `json:"error"`
 }
 
 type creport struct {
@@ -140,10 +151,104 @@ func compareReports(c *ccase, output []byte) []string {
 	return problems
 }
 
+// within adds to problems wherever got doesn't hold what want says: objects
+// are matched by the members want gives, lists exactly, numbers by value.
+func within(want, got any, at, ref string, problems *[]string) {
+	here := at
+	if here == "" {
+		here = "the result"
+	}
+	if want == nil {
+		return
+	}
+	switch w := want.(type) {
+	case map[string]any:
+		g, ok := got.(map[string]any)
+		if !ok {
+			*problems = append(*problems, fmt.Sprintf("%s: %s is %v, want %v", ref, here, got, want))
+			return
+		}
+		for k, wv := range w {
+			path := k
+			if at != "" {
+				path = at + "." + k
+			}
+			gv, ok := g[k]
+			if !ok {
+				*problems = append(*problems, fmt.Sprintf("%s: %s is missing, want %v", ref, path, wv))
+				continue
+			}
+			within(wv, gv, path, ref, problems)
+		}
+	case []any:
+		g, ok := got.([]any)
+		if !ok || len(g) != len(w) {
+			*problems = append(*problems, fmt.Sprintf("%s: %s is %v, want %v", ref, here, got, want))
+			return
+		}
+		for i := range w {
+			within(w[i], g[i], fmt.Sprintf("%s[%d]", at, i), ref, problems)
+		}
+	default:
+		if !reflect.DeepEqual(want, got) {
+			*problems = append(*problems, fmt.Sprintf("%s: %s is %v, want %v", ref, here, got, want))
+		}
+	}
+}
+
+// compareStrictest checks the strictest results of a case, one per entry.
+func compareStrictest(c *ccase, spec []byte) []string {
+	var problems []string
+	for _, s := range c.Strictest {
+		// The result is read as the module wrote it, not through the typed
+		// result, so a list that is empty on purpose stays an empty list.
+		var raw map[string]any
+		err := runWith(&raw, func(in *instance) ([]byte, error) {
+			return in.callDocs("opencrs_resolve_strictest", map[string]any{"ref": s.Ref}, spec)
+		})
+		if s.Error != "" {
+			if err == nil || !strings.Contains(err.Error(), s.Error) {
+				problems = append(problems, fmt.Sprintf("%s: error %v, want one containing %q", s.Ref, err, s.Error))
+			}
+			continue
+		}
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("%s: error %v", s.Ref, err))
+			continue
+		}
+		var want any
+		if len(s.Expect) > 0 {
+			if err := json.Unmarshal(s.Expect, &want); err != nil {
+				problems = append(problems, fmt.Sprintf("%s: %v", s.Ref, err))
+				continue
+			}
+		}
+		within(want, raw, "", s.Ref, &problems)
+		if notes, _ := raw["notes"].([]any); s.Notes != nil && len(notes) != *s.Notes {
+			problems = append(problems, fmt.Sprintf("%s: %d notes, want %d", s.Ref, len(notes), *s.Notes))
+		}
+		// The typed result reads the same answer.
+		if _, err := ResolveStrictest(spec, s.Ref); err != nil {
+			problems = append(problems, fmt.Sprintf("%s: ResolveStrictest: %v", s.Ref, err))
+		}
+	}
+	return problems
+}
+
 // TestConformance runs every case of conformance/0.1 through CheckDir.
 func TestConformance(t *testing.T) {
 	cases := loadCases(t, "conformance/0.1")
 	for _, c := range cases {
+		if len(c.Strictest) > 0 {
+			spec, err := os.ReadFile(filepath.Join(c.dir, c.Specs[0]))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, p := range compareStrictest(c, spec) {
+				t.Errorf("%s: %s", c.ID, p)
+			}
+			continue
+		}
 		now, err := time.Parse(time.RFC3339, c.Now)
 		if err != nil {
 			t.Fatalf("%s: %v", c.ID, err)

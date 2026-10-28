@@ -656,3 +656,34 @@ func Resolve(spec []byte, ref string) ([]Requirements, error) {
 	}
 	return out, nil
 }
+
+// ResolveStrictest returns one set of requirements for everything a
+// reference covers, such that a file that meets it passes on every one of
+// those screens. A reference to a screen gives that screen's own. See
+// "Strictest requirements" in the spec for how each limit is combined.
+// Screens of different pixel sizes are an error, since no file fits them
+// all.
+func ResolveStrictest(spec []byte, ref string) (*StrictestRequirements, error) {
+	return ResolveStrictestContext(context.Background(), spec, ref)
+}
+
+// ResolveStrictestContext is ResolveStrictest with a context. The call does
+// not start if ctx has ended, and if ctx ends during it the result is
+// dropped and the error is ctx.Err(); the module is not interrupted part
+// way through.
+func ResolveStrictestContext(ctx context.Context, spec []byte, ref string) (*StrictestRequirements, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	var res StrictestRequirements
+	err := runWith(&res, func(in *instance) ([]byte, error) {
+		return in.callDocs("opencrs_resolve_strictest", map[string]any{"ref": ref}, spec)
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
