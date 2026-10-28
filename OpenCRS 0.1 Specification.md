@@ -2,7 +2,7 @@
 
 Oct 22, 2026 · @Nick
 
-OpenCRS, the Open Creative Requirements Specification, is an open format for describing what creative needs to work on a digital screen. Working draft.
+OpenCRS™, the Open Creative Requirements Specification, is an open format for describing what creative needs to work on a digital screen. Working draft.
 
 ## Overview
 
@@ -490,6 +490,7 @@ Publishers can start at Core in an afternoon from existing spec sheets, and add 
 - **Licence:** spec text under CC BY 4.0, schemas and reference code under Apache 2.0, so anyone can implement it, including competitors.
 - **Now:** Mestra edits the spec in a public GitHub repository, with issues and proposals open to anyone.
 - **Later:** once several publishers and validators use it, hand it to an independent industry or standards body. Which one, and how proposals are decided until then, is an open question below.
+- **Name:** OpenCRS is a trademark. Anyone may say a product supports OpenCRS; a modified version of the spec can't use the name. The name moves to the same body as the spec. The policy is at [opencrs.dev/trademark](https://opencrs.dev/trademark/).
 
 ## A complete example
 
