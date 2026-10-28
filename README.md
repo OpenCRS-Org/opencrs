@@ -110,6 +110,7 @@ Every [release](https://github.com/OpenCRS-Org/opencrs/releases) has archives fo
 | `opencrs fetch DOMAIN` | Reads a publisher's index, fetches its documents, follows delegates, and says which to trust and why. `--output DIR` saves the trusted ones. |
 | `opencrs conformance` | Runs the conformance suite against this validator, or against any other with `--cmd`. |
 | `opencrs completion SHELL` | Prints completions for bash, zsh, fish or PowerShell. |
+| `opencrs version` | Shows the tool, spec and rule pack versions. |
 
 `opencrs COMMAND --help` has examples for each, and `man opencrs` has the lot. Exit status is 0 when everything passes, 1 when something fails, and 2 for a usage or read error.
 
@@ -207,7 +208,26 @@ for _, r := range res.Reports {
 }
 ```
 
-**In the browser**, the [online checker](https://opencrs.dev/check/) runs the same module, so creative files never leave the machine. The npm (`@opencrs/opencrs`) and Python (`opencrs`) bindings are built and tested here, and not yet published.
+**In the browser**, the [online checker](https://opencrs.dev/check/) runs the same module, so creative files never leave the machine. The npm (`@opencrs/opencrs`) and Python (`opencrs`) packages are native builds of the same core, published with each release.
+
+Every call, in each place you can run it:
+
+| What it does | CLI | Go | JavaScript (`js/opencrs.js`) | npm | Python |
+| --- | --- | --- | --- | --- | --- |
+| Check a document against the schemas | `schema` | `Lint` | `lint` | `lint` | `lint` |
+| Read a file's type, pixels, size and duration | inside `check` | `Probe` | `probe` | `probe`, `probeBytes` | `probe`, `probe_bytes` |
+| Check creative against the screens it targets | `check` | `Check`, `CheckDir` | `check` | `check`, `checkDir` | `check`, `check_dir` |
+| Show a format's or a screen's requirements | `resolve` | `Resolve` | `resolve` | `resolve` | `resolve` |
+| One set of requirements for every screen a reference covers | `resolve --strictest` | `ResolveStrictest` | `resolveStrictest` | `resolveStrictest` | `resolve_strictest` |
+| Fetch a publisher's documents and say which to trust | `fetch` | `FetchPublisher`, `FetchPage`, `SafeClient` | | | |
+| Check a publisher's index and documents, from pages you fetched | | `Publisher` | `publisher` | | |
+| Minimum text size for a viewing distance | | `Legibility` | `legibility` | | |
+| How long a viewer sees a screen | | `Dwell` | `dwell` | | |
+| List the built-in rule packs and their limits | `version` (names and status) | `RulePacks` | `rulePacks` | | |
+| Tool, spec and rule pack versions | `version` | `Version` | `version` | `version` | `version` |
+| Run the conformance suite | `conformance` | | | | |
+
+Every Go call also has a `…Context` form that stops when its context is cancelled. `Publisher` returns the URLs it still needs as `Wanted`; they come from the publisher, so fetch them with `SafeClient`, or let `FetchPublisher` run the whole loop.
 
 ## What's here
 
