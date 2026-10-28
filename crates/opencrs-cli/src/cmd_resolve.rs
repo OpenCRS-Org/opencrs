@@ -23,14 +23,21 @@ pub fn run(a: &ResolveArgs, stdout: &mut dyn Write, stderr: &mut dyn Write) -> i
             return 2;
         }
     };
-    let reqs = match doc.resolve(&r) {
-        Ok(r) => r,
+    let (reqs, out) = match opencrs::budget::ensure(doc.size, || {
+        let reqs = doc.resolve(&r)?;
+        let out: Vec<_> = reqs.iter().map(|r| r.view()).collect();
+        match opencrs::budget::explain(Some(&doc)) {
+            Some(why) => Err(opencrs::resolve::ResolveError::TooComplex(why)),
+            None => Ok((reqs.len(), out)),
+        }
+    }) {
+        Ok(x) => x,
         Err(e) => {
             let _ = writeln!(stderr, "{e}");
             return 1;
         }
     };
-    let out: Vec<_> = reqs.iter().map(|r| r.view()).collect();
+    let _ = reqs;
     let _ = stdout.write_all(json::to_string_pretty(&out).as_bytes());
     0
 }

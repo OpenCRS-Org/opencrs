@@ -46,6 +46,9 @@ pub const CODE_TARGET: &str = "CRS-TARGET";
 pub const CODE_RULE_PACK: &str = "CRS-RULE-PACK";
 pub const CODE_RULE_CONFLICT: &str = "CRS-RULE-CONFLICT";
 pub const CODE_REFERENCE: &str = "CRS-REFERENCE";
+/// The validator stopped because the document asked for more work than it
+/// allows for its size; see `budget`.
+pub const CODE_TOO_COMPLEX: &str = "CRS-TOO-COMPLEX";
 
 /// One finding in a report. Checks that pass aren't reported.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -228,6 +231,14 @@ impl ScreenTable {
         (self.ids.len() - 1) as u32
     }
 
+    /// The ids, one per screen begun, and whether any id appears twice.
+    pub(crate) fn into_ids(self) -> (Vec<String>, bool) {
+        let mut seen = std::collections::HashSet::with_capacity(self.ids.len());
+        let repeats = !self.ids.iter().all(|i| seen.insert(i.as_str()));
+        drop(seen);
+        (self.ids, repeats)
+    }
+
     /// Makes the lists for `found`, which are positions as `begin` gave them,
     /// each in order, with how many screens each has. A screen whose id came
     /// earlier in a list is dropped from it, and a list is cut to
@@ -263,6 +274,12 @@ pub struct Attested {
 }
 
 impl Check {
+    /// The finding for a document that ran the validator out of its work
+    /// budget. Not an error: the document may be valid.
+    pub fn too_complex(message: impl Into<String>) -> Self {
+        Check::new(CODE_TOO_COMPLEX, Severity::NotChecked, message)
+    }
+
     /// Where in a screens.json a finding is caused, as "network n, venue v",
     /// or "" for a finding about screens.
     pub fn scope_label(&self) -> String {

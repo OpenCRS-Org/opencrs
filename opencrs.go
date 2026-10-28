@@ -96,7 +96,24 @@ func newInstance() (*instance, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opencrs: instantiating the module: %w", err)
 	}
-	return &instance{ctx: ctx, mod: mod}, nil
+	in := &instance{ctx: ctx, mod: mod}
+	// The module builds its schema validators the first time it needs
+	// them. Doing that now, before any request is copied in, keeps them
+	// below the request buffers, so a request freed later leaves a hole
+	// the next one fits, not a heap that has to grow past live validators.
+	for _, doc := range warmDocs {
+		if _, err := in.callRaw("opencrs_lint", []byte(doc)); err != nil {
+			_ = mod.Close(ctx)
+			return nil, fmt.Errorf("opencrs: preparing the module: %w", err)
+		}
+	}
+	return in, nil
+}
+
+// warmDocs are the smallest documents of the kinds Check and Resolve read.
+var warmDocs = []string{
+	`{"opencrs":"0.1","publisher":"a.example","updated_at":"2026-01-01T00:00:00Z","networks":[{"id":"n","name":"N","formats":[{"id":"f","pixels":[1,1],"media":{"static":["image/png"]}}],"screens":[{"id":"s","format":"f"}]}]}`,
+	`{"opencrs":"0.1","files":[{"file":"a.png","media_type":"image/png","targets":["a.example/n/f"]}]}`,
 }
 
 // close ends a call: the instance goes back to be reused if it is in a clean
@@ -281,11 +298,14 @@ func runWith(out any, call func(*instance) ([]byte, error)) error {
 		return err
 	}
 	defer in.close()
+	// Dirty until the call returns, so a panic out of it (a caller's reader,
+	// say) doesn't send the instance back to be reused.
+	in.dirty = true
 	resp, err := call(in)
 	if err != nil {
-		in.dirty = true
 		return err
 	}
+	in.dirty = false
 	return decode(resp, out)
 }
 
@@ -331,9 +351,12 @@ func Probe(r io.ReaderAt, size int64) (*ProbeResult, error) {
 		return nil, err
 	}
 	defer in.close()
+	// Dirty until the probe finishes: a failure, or a panic out of r's
+	// ReadAt, can leave a session open in the module.
+	in.dirty = true
 	res, err := probeOn(in, r, size, hex.EncodeToString(h.Sum(nil)))
-	if err != nil {
-		in.dirty = true // a session may be left open
+	if err == nil {
+		in.dirty = false
 	}
 	return res, err
 }

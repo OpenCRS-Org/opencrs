@@ -40,6 +40,12 @@ func (e SchemaError) String() string {
 	return p + ": " + e.Message
 }
 
+// CodeTooComplex is the code of the finding that says the validator stopped
+// because the document asked for more work than it allows for its size. The
+// document may be valid: it is too complex for this validator. The message
+// says where the work came from.
+const CodeTooComplex = "CRS-TOO-COMPLEX"
+
 // Finding is one check result in a report (the brief calls it Check, which
 // would clash with the Check function).
 type Finding struct {

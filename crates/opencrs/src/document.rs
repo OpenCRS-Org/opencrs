@@ -3,7 +3,8 @@
 use crate::check::{
     CODE_REFERENCE, CODE_RULE_CONFLICT, CODE_RULE_PACK, Check, ScreenTable, Severity,
 };
-use crate::model::{Document, Network, Screen};
+use crate::model::{Document, Network, RuleSet, Screen};
+use crate::resolve::{ConflictCause, Level, RuleCache, position_of};
 use crate::rulepack::{builtin_rule_packs, versions_of};
 use serde::Deserialize;
 use serde::de::{Deserializer, MapAccess, Visitor};
@@ -21,6 +22,21 @@ struct Findings {
     at: Vec<Vec<u32>>,
     /// The screen being checked; None outside one or for a screen with no id.
     cur: Option<u32>,
+    /// Unknown-pack findings made so far for each scope.
+    packs: HashMap<[String; 3], usize>,
+    /// Per scope, the finding that stands for the unknown packs past the
+    /// limit.
+    overflow: HashMap<[String; 3], Overflow>,
+}
+
+/// The most unknown-pack findings one scope gets. A scope naming more has
+/// the rest counted in one more finding, so the output stays small however
+/// many packs a document names.
+const MAX_PACK_FINDINGS: usize = 100;
+
+struct Overflow {
+    at: usize,
+    seen: HashSet<u64>,
 }
 
 /// Where in a document a finding is caused: a network, and a venue or a
@@ -40,6 +56,8 @@ impl Findings {
             table: ScreenTable::default(),
             at: Vec::new(),
             cur: None,
+            packs: HashMap::new(),
+            overflow: HashMap::new(),
         }
     }
 
@@ -58,26 +76,33 @@ impl Findings {
     }
 
     fn add_as(&mut self, code: &str, severity: Severity, msg: &str, scope: Scope) {
-        let key = (
-            code.to_string(),
-            msg.to_string(),
-            [scope.network, scope.venue, scope.format].map(String::from),
-        );
+        let scope_key = [scope.network, scope.venue, scope.format].map(String::from);
+        let key = (code.to_string(), msg.to_string(), scope_key.clone());
         let i = match self.index.get(&key) {
             Some(&i) => i,
             None => {
-                self.index.insert(key, self.out.len());
-                let mut c = Check::new(code, severity, msg);
-                c.network = scope.network.to_string();
-                c.venue = scope.venue.to_string();
-                c.format = scope.format.to_string();
-                self.out.push(c);
-                self.at.push(Vec::new());
-                self.out.len() - 1
+                if code == CODE_RULE_PACK
+                    && self
+                        .packs
+                        .get(&scope_key)
+                        .is_some_and(|&n| n >= MAX_PACK_FINDINGS)
+                {
+                    self.fold_pack(&scope_key, msg, severity, scope)
+                } else {
+                    if code == CODE_RULE_PACK {
+                        *self.packs.entry(scope_key).or_default() += 1;
+                    }
+                    self.index.insert(key, self.out.len());
+                    self.push(code, severity, msg, scope)
+                }
             }
         };
-        // A screen's findings arrive together, so one remembered position
-        // is enough to list it once.
+        self.note_screen(i);
+    }
+
+    /// Lists the current screen under finding `i`. A screen's findings
+    /// arrive together, so one remembered position is enough to list it once.
+    fn note_screen(&mut self, i: usize) {
         if let Some(pos) = self.cur
             && self.at[i].last() != Some(&pos)
         {
@@ -85,8 +110,74 @@ impl Findings {
         }
     }
 
+    /// Whether `scope` already has as many unknown-pack findings as it gets.
+    fn packs_full(&self, scope: Scope) -> bool {
+        let key = [scope.network, scope.venue, scope.format].map(String::from);
+        self.packs
+            .get(&key)
+            .is_some_and(|&n| n >= MAX_PACK_FINDINGS)
+    }
+
+    /// Counts an unknown pack past the limit without making its message.
+    fn fold_ref(&mut self, reference: &str, scope: Scope) {
+        let key = [scope.network, scope.venue, scope.format].map(String::from);
+        let i = self.fold_pack(&key, reference, Severity::Warning, scope);
+        self.note_screen(i);
+    }
+
+    fn push(&mut self, code: &str, severity: Severity, msg: &str, scope: Scope) -> usize {
+        crate::budget::charge(crate::budget::Work::Findings, 0, 256);
+        let mut c = Check::new(code, severity, msg);
+        c.network = scope.network.to_string();
+        c.venue = scope.venue.to_string();
+        c.format = scope.format.to_string();
+        self.out.push(c);
+        self.at.push(Vec::new());
+        self.out.len() - 1
+    }
+
+    /// Counts an unknown pack past the scope's limit in that scope's one
+    /// summary finding, and returns it.
+    fn fold_pack(
+        &mut self,
+        key: &[String; 3],
+        msg: &str,
+        severity: Severity,
+        scope: Scope,
+    ) -> usize {
+        use std::hash::{Hash, Hasher};
+        let at = match self.overflow.get(key) {
+            Some(o) => o.at,
+            None => {
+                let at = self.push(CODE_RULE_PACK, severity, "", scope);
+                self.overflow.insert(
+                    key.clone(),
+                    Overflow {
+                        at,
+                        seen: HashSet::new(),
+                    },
+                );
+                at
+            }
+        };
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        msg.hash(&mut h);
+        self.overflow
+            .get_mut(key)
+            .expect("just made")
+            .seen
+            .insert(h.finish());
+        at
+    }
+
     fn finish(self) -> Vec<Check> {
         let mut out = self.out;
+        for o in self.overflow.values() {
+            out[o.at].message = format!(
+                "{} more rule packs named here aren't known to this validator, so creative won't be checked against them",
+                o.seen.len()
+            );
+        }
         for (c, (list, total)) in out.iter_mut().zip(self.table.lists(self.at)) {
             c.screens = list;
             c.screens_total = (total > c.screens.len()).then_some(total as u64);
@@ -111,88 +202,104 @@ impl Findings {
 pub fn check_document(d: &Document) -> Vec<Check> {
     let mut f = Findings::new();
     for n in &d.networks {
-        let scoped = check_network(d, n, &mut f);
+        let mut cache = RuleCache::default();
+        let scoped = check_network(d, n, &mut cache, &mut f);
         for s in &n.screens {
-            check_screen(d, n, s, &scoped, &mut f);
+            if crate::budget::tripped() {
+                break;
+            }
+            check_screen(d, n, s, &scoped, &mut cache, &mut f);
         }
     }
+    crate::budget::explain(Some(d));
     f.finish()
 }
 
-/// What a network's venues and formats already account for, by id, so the
-/// screens that inherit it don't repeat it.
+/// What a network's formats already account for, so the screens that
+/// inherit it don't repeat it. A conflict is told apart by its cause (the
+/// element and the level that restated it), not by its wording, which also
+/// depends on what the levels above it changed.
 struct Scoped {
-    venue_conflicts: HashMap<String, HashSet<String>>,
-    format_conflicts: HashMap<String, HashSet<String>>,
+    /// By position of the first format with each id, the elements whose
+    /// restating by the format conflicts with the network's.
+    format_causes: HashMap<usize, HashSet<(String, String)>>,
 }
 
 /// Reports what the network's own rules, its venues' and its formats' cause,
 /// each once.
-fn check_network(d: &Document, n: &Network, f: &mut Findings) -> Scoped {
+fn check_network(d: &Document, n: &Network, cache: &mut RuleCache, f: &mut Findings) -> Scoped {
     let at = |venue, format| Scope {
         network: &n.id,
         venue,
         format,
     };
     if let Some(r) = &n.rules {
-        unknown_packs(f, &r.rule_packs, at("", ""));
+        unknown_packs(f, r, at("", ""));
     }
     let mut scoped = Scoped {
-        venue_conflicts: HashMap::new(),
-        format_conflicts: HashMap::new(),
+        format_causes: HashMap::new(),
     };
     for v in &n.venues {
         if let Some(r) = &v.rules {
-            unknown_packs(f, &r.rule_packs, at(&v.id, ""));
+            unknown_packs(f, r, at(&v.id, ""));
         }
-        let conflicts = d.venue_conflicts(n, v);
-        for msg in &conflicts {
+        for msg in &d.venue_rules(cache, n, v).conflicts {
             f.add_as(CODE_RULE_CONFLICT, Severity::Error, msg, at(&v.id, ""));
         }
-        if !conflicts.is_empty() {
-            scoped
-                .venue_conflicts
-                .entry(v.id.clone())
-                .or_default()
-                .extend(conflicts);
-        }
     }
-    for fm in &n.formats {
+    for (i, fm) in n.formats.iter().enumerate() {
         if let Some(r) = &fm.fields.rules {
-            unknown_packs(f, &r.rule_packs, at("", &fm.id));
+            unknown_packs(f, r, at("", &fm.id));
         }
-        let conflicts = d.build(n, fm, None, None).rules.conflicts;
-        for msg in &conflicts {
+        let rules = d.format_rules(cache, n, fm);
+        for msg in &rules.conflicts {
             f.add_as(CODE_RULE_CONFLICT, Severity::Error, msg, at("", &fm.id));
         }
-        if !conflicts.is_empty() {
-            scoped
-                .format_conflicts
-                .entry(fm.id.clone())
-                .or_default()
-                .extend(conflicts);
+        // Screens use the first format with an id; a repeat of it is
+        // reported, but no screen inherits it.
+        if !rules.causes.is_empty()
+            && n.format(&fm.id).and_then(|x| position_of(&n.formats, x)) == Some(i)
+        {
+            scoped.format_causes.insert(
+                i,
+                rules
+                    .causes
+                    .iter()
+                    .map(|c| (c.role.clone(), c.when.clone()))
+                    .collect(),
+            );
         }
     }
     scoped
 }
 
-fn check_screen(d: &Document, n: &Network, s: &Screen, scoped: &Scoped, f: &mut Findings) {
+fn check_screen(
+    d: &Document,
+    n: &Network,
+    s: &Screen,
+    scoped: &Scoped,
+    cache: &mut RuleCache,
+    f: &mut Findings,
+) {
     f.begin(&s.id);
-    match d.resolve_screen(n, s) {
+    crate::budget::charge_flat(8);
+    match d.resolve_screen_with(cache, n, s) {
         Err(e) => f.add(CODE_REFERENCE, &e.to_string()),
         Ok(r) => {
-            let covered = |msg: &String| {
-                scoped
-                    .venue_conflicts
-                    .get(&s.venue)
-                    .is_some_and(|c| c.contains(msg))
-                    || scoped
-                        .format_conflicts
-                        .get(&s.format)
-                        .is_some_and(|c| c.contains(msg))
+            let format_at = position_of(&n.formats, n.format(&s.format).expect("resolved"));
+            let covered = |c: &ConflictCause| match c.level {
+                // The venue's conflicts with the network don't depend on
+                // the screen, and were reported for the venue.
+                Level::Venue => true,
+                Level::Format => format_at
+                    .and_then(|i| scoped.format_causes.get(&i))
+                    .is_some_and(|set| set.contains(&(c.role.clone(), c.when.clone()))),
+                _ => false,
             };
-            for msg in r.rules.conflicts.iter().filter(|m| !covered(m)) {
-                f.add(CODE_RULE_CONFLICT, msg);
+            for (msg, cause) in r.rules.conflicts.iter().zip(&r.rules.causes) {
+                if !covered(cause) {
+                    f.add(CODE_RULE_CONFLICT, msg);
+                }
             }
             // The screen's own rules; the levels above it were reported.
             let own = [
@@ -200,11 +307,42 @@ fn check_screen(d: &Document, n: &Network, s: &Screen, scoped: &Scoped, f: &mut 
                 s.overrides.as_ref().and_then(|o| o.fields.rules.as_ref()),
             ];
             for rs in own.into_iter().flatten() {
-                unknown_packs(f, &rs.rule_packs, Scope::default());
+                unknown_packs(f, rs, Scope::default());
             }
         }
     }
     f.end_screen();
+}
+
+/// A screen read for the document checks, which look only at its ids, its
+/// overrides and its own rules: the rest (placement, viewing, platform ids,
+/// location) is skipped unread, and left at its default. Cheaper than the
+/// whole screen, which dominates the time to lint a large document.
+struct LintScreen(Screen);
+
+impl<'de> Deserialize<'de> for LintScreen {
+    fn deserialize<D: Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Slim {
+            id: String,
+            format: String,
+            #[serde(default)]
+            venue: String,
+            #[serde(default)]
+            overrides: Option<Box<crate::model::Overrides>>,
+            #[serde(default)]
+            rules: Option<Box<RuleSet>>,
+        }
+        let s = Slim::deserialize(de)?;
+        Ok(LintScreen(Screen {
+            id: s.id,
+            format: s.format,
+            venue: s.venue,
+            overrides: s.overrides,
+            rules: s.rules,
+            ..Screen::default()
+        }))
+    }
 }
 
 /// An object's members, in order, with each value left as the text it was.
@@ -280,21 +418,39 @@ pub fn check_document_text(raw: &str) -> Option<Vec<Check>> {
     d.networks = shells;
     let mut f = Findings::new();
     for (n, list) in d.networks.iter().zip(lists) {
-        let scoped = check_network(&d, n, &mut f);
+        let mut cache = RuleCache::default();
+        let scoped = check_network(&d, n, &mut cache, &mut f);
         for raw in list {
-            let s: Screen = serde_json::from_str(raw.get()).ok()?;
-            check_screen(&d, n, &s, &scoped, &mut f);
+            if crate::budget::tripped() {
+                break;
+            }
+            let s = serde_json::from_str::<LintScreen>(raw.get()).ok()?.0;
+            check_screen(&d, n, &s, &scoped, &mut cache, &mut f);
         }
     }
+    crate::budget::explain(Some(&d));
     Some(f.finish())
 }
 
 /// Warns about each referenced rule pack that isn't built in, naming the
 /// versions that are when only the version is wrong.
-fn unknown_packs(f: &mut Findings, refs: &[String], scope: Scope) {
+fn unknown_packs(f: &mut Findings, rules: &RuleSet, scope: Scope) {
     let known = builtin_rule_packs();
+    let refs = &rules.rule_packs;
+    // Each reference is looked up, and may become a finding.
+    if !crate::budget::charge(
+        crate::budget::Work::Packs,
+        rules as *const RuleSet as usize,
+        refs.len() as u64 * 32,
+    ) {
+        return;
+    }
     for reference in refs {
         if known.contains_key(reference) {
+            continue;
+        }
+        if f.packs_full(scope) {
+            f.fold_ref(reference, scope);
             continue;
         }
         let mut msg = format!(
@@ -343,7 +499,7 @@ mod tests {
             v["networks"] = json!([n.clone(), n]);
         });
         with(&|v| v["networks"][0]["screens"][0]["pixels"] = "typed badly".into());
-        with(&|v| v["networks"][0]["screens"][0]["viewing"]["dwell_s"] = "x".into());
+        with(&|v| v["networks"][0]["screens"][0]["overrides"] = json!({"pixels": "x"}));
         with(&|v| {
             v.as_object_mut().unwrap().remove("networks");
         });
@@ -433,5 +589,114 @@ mod tests {
             let out = serde_json::to_string(own).unwrap();
             assert!(out.contains(r#""screens_total":2500"#), "{}", &out[..120]);
         }
+    }
+
+    fn network_doc(rules: Value, screens: Vec<Value>) -> Document {
+        serde_json::from_value(json!({
+            "opencrs": "0.1", "publisher": "p.example", "updated_at": "2026-01-01T00:00:00Z",
+            "networks": [{
+                "id": "n", "name": "N",
+                "rules": rules,
+                "venues": [{"id": "v", "name": "V"}],
+                "formats": [{"id": "f", "pixels": [1, 1], "media": {"static": ["image/png"]}}],
+                "screens": screens,
+            }],
+        }))
+        .unwrap()
+    }
+
+    fn timed(f: impl FnOnce() -> Vec<Check>) -> Vec<Check> {
+        let start = std::time::Instant::now();
+        let out = f();
+        assert!(start.elapsed().as_secs() < 30, "took {:?}", start.elapsed());
+        out
+    }
+
+    /// Merging a long list of rules is not a cost for every screen: these
+    /// inputs took many seconds, then minutes, when each screen redid the
+    /// merge (the second two are over the schema's limits on purpose, as a
+    /// typed document can be).
+    #[test]
+    fn many_rules_and_screens_stay_fast() {
+        let screens = |n: usize| -> Vec<Value> {
+            (0..n)
+                .map(|i| json!({"id": format!("s{i}"), "format": "f", "venue": "v"}))
+                .collect()
+        };
+        let elements: Vec<Value> = (0..2000)
+            .map(|i| json!({"role": format!("r{i}"), "min_cap_height_mm": 1}))
+            .collect();
+        let d = network_doc(json!({"required_elements": elements}), screens(2000));
+        assert!(timed(|| check_document(&d)).is_empty());
+
+        let packs: Vec<String> = (0..50_000).map(|i| format!("p{i}@1")).collect();
+        let d = network_doc(json!({"rule_packs": packs}), screens(5000));
+        let checks = timed(|| check_document(&d));
+        // 100 findings, and one that counts the 49,900 others.
+        assert_eq!(checks.len(), 101);
+        assert!(
+            checks[100].message.starts_with("49900 more rule packs"),
+            "{}",
+            checks[100].message
+        );
+        assert!(
+            checks
+                .iter()
+                .all(|c| c.screens.is_empty() && c.network == "n")
+        );
+    }
+
+    /// A conflict the format causes against the network is reported once,
+    /// for the format, even where a venue's rules change what it conflicts
+    /// with and so how it reads on that venue's screens.
+    #[test]
+    fn a_format_conflict_is_reported_once() {
+        let legal = |rect: [i64; 4]| json!({"required_elements": [{"role": "legal", "within_rect_px": rect}]});
+        let mut d = network_doc(
+            legal([0, 1600, 1080, 320]),
+            vec![
+                json!({"id": "a", "format": "f", "venue": "v"}),
+                json!({"id": "b", "format": "f"}),
+            ],
+        );
+        d.networks[0].venues[0].rules =
+            serde_json::from_value(legal([0, 1700, 1080, 100])).unwrap();
+        d.networks[0].formats[0].fields.rules =
+            serde_json::from_value(legal([0, 0, 1080, 300])).unwrap();
+        let checks = check_document(&d);
+        let conflicts: Vec<_> = checks
+            .iter()
+            .filter(|c| c.code == "CRS-RULE-CONFLICT")
+            .collect();
+        assert_eq!(conflicts.len(), 1, "{conflicts:?}");
+        assert_eq!(conflicts[0].format, "f");
+        assert!(conflicts[0].screens.is_empty());
+    }
+
+    /// A repeated format is reported on its own, and its conflicts are not
+    /// taken for the first one's: screens use the first.
+    #[test]
+    fn a_repeated_format_does_not_cover_the_first() {
+        let legal = |rect: [i64; 4]| -> crate::model::RuleSet {
+            serde_json::from_value(
+                json!({"required_elements": [{"role": "legal", "within_rect_px": rect}]}),
+            )
+            .unwrap()
+        };
+        let mut d = network_doc(
+            json!({"required_elements": [{"role": "legal", "within_rect_px": [0, 1600, 1080, 320]}]}),
+            vec![json!({"id": "a", "format": "f"})],
+        );
+        let mut again = d.networks[0].formats[0].clone();
+        again.fields.rules = Some(legal([0, 0, 1080, 300]));
+        d.networks[0].formats.push(again);
+        let checks = check_document(&d);
+        assert_eq!(checks.len(), 1, "{checks:?}");
+        assert!(checks[0].screens.is_empty());
+        // Now the first one conflicts, and the repeat doesn't.
+        let mut d = d;
+        d.networks[0].formats.reverse();
+        let checks = check_document(&d);
+        assert_eq!(checks.len(), 1, "{checks:?}");
     }
 }

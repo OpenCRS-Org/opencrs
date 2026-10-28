@@ -5,7 +5,9 @@ use crate::error::Error;
 use crate::gofmt::quote;
 use crate::model::*;
 use serde::Serialize;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
+use std::sync::Arc;
 
 /// A parsed global reference to a format or a screen.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -64,12 +66,16 @@ pub enum ResolveError {
     Reference(String),
     /// The reference names something the document doesn't have.
     Other(String),
+    /// The work budget ran out; the text says why.
+    TooComplex(String),
 }
 
 impl fmt::Display for ResolveError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ResolveError::Reference(m) | ResolveError::Other(m) => f.write_str(m),
+            ResolveError::Reference(m) | ResolveError::Other(m) | ResolveError::TooComplex(m) => {
+                f.write_str(m)
+            }
         }
     }
 }
@@ -104,36 +110,85 @@ pub struct Requirements<'a> {
 }
 
 impl Requirements<'_> {
+    /// A fingerprint of everything about a screen's requirements except its
+    /// id: the venue and format it uses, and the parts of the screen that
+    /// change what is asked of creative (viewing, placement, overrides and
+    /// the screen's own rules). Screens with the same fingerprint have the
+    /// same requirements, so a check or a view of one holds for all. None
+    /// for a requirement that isn't a screen's.
+    pub(crate) fn fingerprint(&self) -> Option<[u8; 32]> {
+        use sha2::{Digest, Sha256};
+        let s = self.screen?;
+        let mut h = Sha256::new();
+        let venue = self.venue.map_or("", |v| v.id.as_str());
+        for part in [venue, self.format_id] {
+            h.update((part.len() as u64).to_le_bytes());
+            h.update(part.as_bytes());
+        }
+        let parts = serde_json::to_vec(&(&s.placement, &s.viewing, &s.overrides, &s.rules)).ok()?;
+        h.update(&parts);
+        Some(h.finalize().into())
+    }
+
     /// The screen's id, or "" for a format-only requirement.
     pub fn screen_id(&self) -> &str {
         self.screen.map_or("", |s| s.id.as_str())
     }
 }
 
-/// A RuleSet after merging network, venue, format, then screen.
+fn arc_empty<T>(v: &Arc<Vec<T>>) -> bool {
+    v.is_empty()
+}
+
+/// Which level of the chain a rule came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Level {
+    Network,
+    Venue,
+    Format,
+    ScreenOverrides,
+    Screen,
+}
+
+/// What a recorded conflict is about: the level that restated an element,
+/// and the element, so the same conflict can be recognised whatever the
+/// levels above it changed in its wording.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ConflictCause {
+    pub(crate) level: Level,
+    pub(crate) role: String,
+    pub(crate) when: String,
+}
+
+/// A RuleSet after merging network, venue, format, then screen. The long
+/// lists are shared (`Arc`), so a screen that adds nothing to them doesn't
+/// copy them.
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct Rules {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub legibility: Option<Legibility>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub required_elements: Vec<RequiredElement>,
+    #[serde(skip_serializing_if = "arc_empty")]
+    pub required_elements: Arc<Vec<RequiredElement>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_words: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reading_rate_wps: Option<f64>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub restricted_categories: Vec<String>,
+    #[serde(skip_serializing_if = "arc_empty")]
+    pub restricted_categories: Arc<Vec<String>>,
     pub motion: MotionRules,
     pub brightness: Brightness,
     pub playback: Playback,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub rule_packs: Vec<String>,
+    #[serde(skip_serializing_if = "arc_empty")]
+    pub rule_packs: Arc<Vec<String>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
     /// Rules that tightening has made impossible to meet, such as position
     /// limits that don't overlap.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub conflicts: Vec<String>,
+    /// What each of `conflicts` is about, in the same order.
+    #[serde(skip)]
+    pub(crate) causes: Vec<ConflictCause>,
 }
 
 impl Document {
@@ -176,8 +231,8 @@ impl Document {
                     quote(&n.id)
                 ))
             })?;
-            each(self.resolve_screen(n, s)?);
-            return Ok(());
+            each(self.resolve_screen_with(&mut RuleCache::default(), n, s)?);
+            return self.if_tripped();
         }
         let f = n.format(&r.format).ok_or_else(|| {
             ResolveError::Other(format!(
@@ -186,23 +241,38 @@ impl Document {
                 quote(&n.id)
             ))
         })?;
+        let mut cache = RuleCache::default();
         let mut any = false;
         for s in n.screens_of(&f.id) {
-            each(self.resolve_screen(n, s)?);
+            // Each reference to a format walks its screens.
+            if !crate::budget::charge(crate::budget::Work::Screens, f as *const Format as usize, 8)
+            {
+                break;
+            }
+            each(self.resolve_screen_with(&mut cache, n, s)?);
             any = true;
         }
         if !any {
-            each(self.build(n, f, None, None));
+            each(self.build_with(&mut cache, n, f, None, None));
         }
-        Ok(())
+        self.if_tripped()
+    }
+
+    /// Ok unless the work budget is spent, then the reason.
+    pub(crate) fn if_tripped(&self) -> Result<(), ResolveError> {
+        match crate::budget::explain(Some(self)) {
+            Some(why) => Err(ResolveError::TooComplex(why)),
+            None => Ok(()),
+        }
     }
 
     fn network(&self, id: &str) -> Option<&Network> {
         self.networks.iter().find(|n| n.id == id)
     }
 
-    pub(crate) fn resolve_screen<'a>(
+    pub(crate) fn resolve_screen_with<'a>(
         &'a self,
+        cache: &mut RuleCache,
         n: &'a Network,
         s: &'a Screen,
     ) -> Result<Requirements<'a>, ResolveError> {
@@ -225,20 +295,23 @@ impl Document {
                 ))
             })?);
         }
-        Ok(self.build(n, f, v, Some(s)))
+        Ok(self.build_with(cache, n, f, v, Some(s)))
     }
 
-    /// The conflicts a venue's rules make with its network's, which hold for
-    /// every screen at the venue whatever its format.
-    pub(crate) fn venue_conflicts(&self, n: &Network, v: &Venue) -> Vec<String> {
-        let mut r = Rules::default();
-        r.merge_at(n.rules.as_ref(), &format!("network {}", n.id));
-        r.merge_at(v.rules.as_ref(), &format!("venue {}", v.id));
-        r.conflicts
+    /// The rules of a network and a venue of it, which hold for every screen
+    /// at the venue whatever its format.
+    pub(crate) fn venue_rules(&self, cache: &mut RuleCache, n: &Network, v: &Venue) -> Rules {
+        cache.prefix(n, None, Some(v))
     }
 
-    pub(crate) fn build<'a>(
+    /// The rules of a network and one of its formats.
+    pub(crate) fn format_rules(&self, cache: &mut RuleCache, n: &Network, f: &Format) -> Rules {
+        cache.prefix(n, Some(f), None)
+    }
+
+    pub(crate) fn build_with<'a>(
         &'a self,
+        cache: &mut RuleCache,
         n: &'a Network,
         f: &'a Format,
         v: Option<&'a Venue>,
@@ -249,7 +322,21 @@ impl Document {
             Some(o) => apply_overrides(&f.fields, o),
             None => f.fields.clone(),
         };
-        let mut r = Requirements {
+        // Rules merge network, then venue, then format, then screen. The
+        // levels above the screen are the same for every screen with this
+        // venue and format, so they are merged once.
+        let mut rules = cache.prefix(n, Some(f), v);
+        if let Some(s) = s {
+            if let Some(o) = &s.overrides {
+                rules.merge_at(o.fields.rules.as_ref(), Level::ScreenOverrides, || {
+                    format!("screen {} overrides", s.id)
+                });
+            }
+            rules.merge_at(s.rules.as_deref(), Level::Screen, || {
+                format!("screen {}", s.id)
+            });
+        }
+        Requirements {
             publisher: &self.publisher,
             network: n,
             format_id: &f.id,
@@ -261,27 +348,91 @@ impl Document {
             safe_area: ff.safe_area,
             blocked_regions: ff.blocked_regions,
             segments: ff.segments.unwrap_or_default(),
-            rules: Rules::default(),
-        };
+            rules,
+        }
+    }
+}
 
-        // Rules merge network, then venue, then format, then screen.
-        let mut levels: Vec<(String, Option<&RuleSet>)> =
-            vec![(format!("network {}", n.id), n.rules.as_ref())];
-        if let Some(v) = v {
-            levels.push((format!("venue {}", v.id), v.rules.as_ref()));
+/// The position of `item` in `list`, if it is an element of it.
+pub(crate) fn position_of<T>(list: &[T], item: &T) -> Option<usize> {
+    let size = std::mem::size_of::<T>();
+    let (base, at) = (list.as_ptr() as usize, item as *const T as usize);
+    (size > 0 && at >= base && at < base + std::mem::size_of_val(list) && (at - base) % size == 0)
+        .then(|| (at - base) / size)
+}
+
+/// Rules merged for the levels above a screen, by the venue and format in
+/// play, for one network and one pass over its screens. Not kept anywhere:
+/// every operation makes its own, so nothing goes stale.
+#[derive(Default)]
+pub(crate) struct RuleCache {
+    network: usize,
+    net: Option<Rules>,
+    venue: HashMap<usize, Rules>,
+    /// (venue position or `usize::MAX`, format position)
+    pair: HashMap<(usize, usize), Rules>,
+}
+
+impl RuleCache {
+    fn net(&mut self, n: &Network) -> &Rules {
+        let id = n as *const Network as usize;
+        if self.network != id {
+            *self = RuleCache {
+                network: id,
+                ..Default::default()
+            };
         }
-        levels.push((format!("format {}", f.id), f.fields.rules.as_ref()));
-        if let Some(s) = s {
-            if let Some(o) = &s.overrides {
-                levels.push((
-                    format!("screen {} overrides", s.id),
-                    o.fields.rules.as_ref(),
-                ));
+        self.net.get_or_insert_with(|| {
+            let mut r = Rules::default();
+            r.merge_at(n.rules.as_ref(), Level::Network, || {
+                format!("network {}", n.id)
+            });
+            r
+        })
+    }
+
+    fn venue(&mut self, n: &Network, vp: usize, v: &Venue) -> Rules {
+        if let Some(r) = self.venue.get(&vp) {
+            return r.clone();
+        }
+        let mut r = self.net(n).clone();
+        r.merge_at(v.rules.as_ref(), Level::Venue, || format!("venue {}", v.id));
+        self.venue.insert(vp, r.clone());
+        r
+    }
+
+    /// The network's rules, then the venue's, then the format's. A venue or
+    /// format that isn't an element of the network's lists is merged but not
+    /// remembered.
+    pub(crate) fn prefix(&mut self, n: &Network, f: Option<&Format>, v: Option<&Venue>) -> Rules {
+        let vp = v.map(|v| position_of(&n.venues, v));
+        let fp = f.map(|f| position_of(&n.formats, f));
+        let key = match (vp, fp) {
+            (None, Some(Some(fp))) => Some((usize::MAX, fp)),
+            (Some(Some(vp)), Some(Some(fp))) => Some((vp, fp)),
+            (Some(Some(vp)), None) => return self.venue(n, vp, v.expect("a venue")),
+            (None, None) => return self.net(n).clone(),
+            _ => None,
+        };
+        if let Some(r) = key.and_then(|k| self.pair.get(&k)) {
+            return r.clone();
+        }
+        let mut r = match (v, vp) {
+            (Some(v), Some(Some(vp))) => self.venue(n, vp, v),
+            (Some(v), _) => {
+                let mut r = self.net(n).clone();
+                r.merge_at(v.rules.as_ref(), Level::Venue, || format!("venue {}", v.id));
+                r
             }
-            levels.push((format!("screen {}", s.id), s.rules.as_deref()));
+            (None, _) => self.net(n).clone(),
+        };
+        if let Some(f) = f {
+            r.merge_at(f.fields.rules.as_ref(), Level::Format, || {
+                format!("format {}", f.id)
+            });
         }
-        for (name, rules) in levels {
-            r.rules.merge_at(rules, &name);
+        if let Some(k) = key {
+            self.pair.insert(k, r.clone());
         }
         r
     }
@@ -298,25 +449,37 @@ fn sorted_by<T, K: Ord + ?Sized>(items: &[T], key: impl Fn(&T) -> &K) -> Vec<u32
     at
 }
 
-/// The positions in `sorted` (an index from [`sorted_by`] over `items`)
-/// whose key is `want`, in position order. Falls back to a scan if the index
-/// no longer fits the list.
+/// The items of `items` whose key is `want`, in position order, found
+/// through `sorted` (an index from [`sorted_by`] over `items`). The index
+/// is checked as it is used, so a list changed since it was built (a
+/// different length, or ids that no longer sort) is read by scanning
+/// instead. A document should not be edited after its first lookup, but a
+/// stale index never gives fewer matches than the list has at the ends of
+/// the run it finds.
 fn matching<'a: 'w, 'w, T>(
     items: &'a [T],
     sorted: &'a [u32],
     want: &'w str,
     key: impl Fn(&T) -> &str + Copy + 'w,
 ) -> Box<dyn Iterator<Item = &'a T> + 'w> {
+    let scan = move || -> Box<dyn Iterator<Item = &'a T> + 'w> {
+        Box::new(items.iter().filter(move |t| key(t) == want))
+    };
     let get = |i: u32| items.get(i as usize).map(key);
-    let fits = sorted.len() == items.len()
-        && sorted.first().is_none_or(|&i| get(i).is_some())
-        && sorted.last().is_none_or(|&i| get(i).is_some());
-    if !fits {
-        return Box::new(items.iter().filter(move |t| key(t) == want));
+    if sorted.len() != items.len() {
+        return scan();
     }
     let lo = sorted.partition_point(|&i| get(i).is_some_and(|k| k < want));
     let hi = lo + sorted[lo..].partition_point(|&i| get(i) == Some(want));
-    Box::new(sorted[lo..hi].iter().map(move |&i| &items[i as usize]))
+    let run = &sorted[lo..hi];
+    let ordered = run.windows(2).all(|w| w[0] < w[1])
+        && run.iter().all(|&i| get(i) == Some(want))
+        && (lo == 0 || get(sorted[lo - 1]).is_some_and(|k| k < want))
+        && (hi == sorted.len() || get(sorted[hi]).is_some_and(|k| k > want));
+    if !ordered {
+        return scan();
+    }
+    Box::new(run.iter().map(move |&i| &items[i as usize]))
 }
 
 impl Network {
@@ -436,15 +599,43 @@ impl Rules {
     /// inherited and new values. Only required elements can be removed.
     #[cfg(test)]
     fn merge(&mut self, rs: &RuleSet) {
-        self.merge_at(Some(rs), "a lower level");
+        self.merge_at(Some(rs), Level::Screen, || "a lower level".to_string());
     }
 
-    /// `merge`, naming the level in any conflict it records.
-    fn merge_at(&mut self, rs: Option<&RuleSet>, level: &str) {
+    /// `merge`, naming the level in any conflict it records. Lists are
+    /// looked up through sets and maps once they are long, so merging a long
+    /// list is linear, and a list the level doesn't touch isn't copied.
+    pub(crate) fn merge_at(
+        &mut self,
+        rs: Option<&RuleSet>,
+        level: Level,
+        name: impl FnOnce() -> String,
+    ) {
         let Some(rs) = rs else { return };
-        if let Some(rm) = &rs.remove {
-            self.required_elements
-                .retain(|e| !rm.required_elements.contains(&e.role));
+        // Counted by the size of what is merged in, and of what it is
+        // merged into when that has to be looked through.
+        let incoming = rs.required_elements.len()
+            + rs.rule_packs.len()
+            + rs.restricted_categories.len()
+            + rs.remove.as_ref().map_or(0, |r| r.required_elements.len());
+        let against = if incoming > 8 {
+            self.required_elements.len() + self.rule_packs.len() + self.restricted_categories.len()
+        } else {
+            0
+        };
+        if !crate::budget::charge(
+            crate::budget::Work::RuleMerge,
+            rs as *const RuleSet as usize,
+            (incoming + against + 1) as u64 * 8,
+        ) {
+            return;
+        }
+        if let Some(rm) = &rs.remove
+            && !rm.required_elements.is_empty()
+            && !self.required_elements.is_empty()
+        {
+            let roles: HashSet<&str> = rm.required_elements.iter().map(String::as_str).collect();
+            Arc::make_mut(&mut self.required_elements).retain(|e| !roles.contains(e.role.as_str()));
         }
         if let Some(l) = &rs.legibility {
             let mut merged = self.legibility.clone().unwrap_or_default();
@@ -455,38 +646,12 @@ impl Rules {
             merged.ratio = smaller(merged.ratio, l.ratio);
             self.legibility = Some(merged);
         }
-        for e in &rs.required_elements {
-            // The same element (role and condition) restated lower down
-            // merges with the inherited one, keeping the stricter limits.
-            let Some(i) = self
-                .required_elements
-                .iter()
-                .position(|x| x.role == e.role && x.when == e.when)
-            else {
-                self.required_elements.push(e.clone());
-                continue;
-            };
-            let prev = self.required_elements[i].clone();
-            self.required_elements[i] = stricter_element(&prev, e);
-            if let (Some(w), Some(p), Some(er)) = (
-                self.required_elements[i].within_rect_px,
-                prev.within_rect_px,
-                e.within_rect_px,
-            ) && (w.0[2] == 0 || w.0[3] == 0)
-            {
-                self.conflicts.push(format!(
-                    "{level} restates the {} element within {er}, which doesn't overlap the inherited {p}; no creative can comply",
-                    describe_element(e),
-                ));
-            }
+        if !rs.required_elements.is_empty() {
+            self.merge_elements(rs, level, name);
         }
         self.max_words = smaller(self.max_words, rs.max_words);
         self.reading_rate_wps = smaller(self.reading_rate_wps, rs.reading_rate_wps);
-        for c in &rs.restricted_categories {
-            if !self.restricted_categories.contains(c) {
-                self.restricted_categories.push(c.clone());
-            }
-        }
+        add_new(&mut self.restricted_categories, &rs.restricted_categories);
         self.motion.merge(rs.motion.as_ref());
         if let Some(b) = &rs.brightness {
             self.brightness.max_night_cd_m2 =
@@ -498,28 +663,86 @@ impl Rules {
             self.playback.max_transition_s =
                 smaller(self.playback.max_transition_s, p.max_transition_s);
         }
-        // A set once the lists are long: a network naming many packs is
-        // merged into every screen under it.
-        if rs.rule_packs.len() > 8 {
-            let mut have: std::collections::HashSet<&str> =
-                self.rule_packs.iter().map(String::as_str).collect();
-            let new: Vec<String> = rs
-                .rule_packs
-                .iter()
-                .filter(|p| have.insert(p.as_str()))
-                .cloned()
-                .collect();
-            self.rule_packs.extend(new);
-        } else {
-            for p in &rs.rule_packs {
-                if !self.rule_packs.contains(p) {
-                    self.rule_packs.push(p.clone());
-                }
-            }
-        }
+        add_new(&mut self.rule_packs, &rs.rule_packs);
         if !rs.notes.is_empty() {
             self.notes.push(rs.notes.clone());
         }
+    }
+
+    fn merge_elements(&mut self, rs: &RuleSet, level: Level, name: impl FnOnce() -> String) {
+        let list = Arc::make_mut(&mut self.required_elements);
+        // The same element (role and condition) restated lower down merges
+        // with the inherited one, keeping the stricter limits. Found by a
+        // map once there are many to find; the first of equals wins.
+        let mut by_key: Option<HashMap<(String, String), usize>> = (rs.required_elements.len() > 8)
+            .then(|| {
+                let mut m = HashMap::new();
+                for (i, x) in list.iter().enumerate() {
+                    m.entry((x.role.clone(), x.when.clone())).or_insert(i);
+                }
+                m
+            });
+        let mut name = Some(name);
+        for e in &rs.required_elements {
+            let found = match &by_key {
+                Some(m) => m.get(&(e.role.clone(), e.when.clone())).copied(),
+                None => list
+                    .iter()
+                    .position(|x| x.role == e.role && x.when == e.when),
+            };
+            let Some(i) = found else {
+                if let Some(m) = by_key.as_mut() {
+                    m.insert((e.role.clone(), e.when.clone()), list.len());
+                }
+                list.push(e.clone());
+                continue;
+            };
+            let prev = list[i].clone();
+            list[i] = stricter_element(&prev, e);
+            if let (Some(w), Some(p), Some(er)) = (
+                list[i].within_rect_px,
+                prev.within_rect_px,
+                e.within_rect_px,
+            ) && (w.0[2] == 0 || w.0[3] == 0)
+            {
+                let level_name = name.take().map_or_else(String::new, |f| f());
+                self.conflicts.push(format!(
+                    "{level_name} restates the {} element within {er}, which doesn't overlap the inherited {p}; no creative can comply",
+                    describe_element(e),
+                ));
+                self.causes.push(ConflictCause {
+                    level,
+                    role: e.role.clone(),
+                    when: e.when.clone(),
+                });
+            }
+        }
+    }
+}
+
+/// Adds the items of `add` that `list` lacks, in order, without copying
+/// `list` when there is nothing to add.
+fn add_new(list: &mut Arc<Vec<String>>, add: &[String]) {
+    if add.is_empty() {
+        return;
+    }
+    let new: Vec<String> = if add.len() > 8 || list.len() > 64 {
+        let mut have: HashSet<&str> = list.iter().map(String::as_str).collect();
+        add.iter()
+            .filter(|p| have.insert(p.as_str()))
+            .cloned()
+            .collect()
+    } else {
+        let mut new: Vec<String> = Vec::new();
+        for p in add {
+            if !list.contains(p) && !new.contains(p) {
+                new.push(p.clone());
+            }
+        }
+        new
+    };
+    if !new.is_empty() {
+        Arc::make_mut(list).extend(new);
     }
 }
 

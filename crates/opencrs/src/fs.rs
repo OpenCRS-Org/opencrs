@@ -391,6 +391,7 @@ mod tests {
                     ..CreativeFile::default()
                 })
                 .collect(),
+            size: 0,
         }
     }
 

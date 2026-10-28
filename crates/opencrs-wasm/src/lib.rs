@@ -126,6 +126,11 @@ mod ops {
     }
 
     fn try_check(req: Vec<u8>) -> Result<Vec<u8>, Vec<u8>> {
+        let bytes = req.len();
+        opencrs::budget::ensure(bytes, || try_check_within(req))
+    }
+
+    fn try_check_within(req: Vec<u8>) -> Result<Vec<u8>, Vec<u8>> {
         let (r, docs, m) = {
             let f: Frame<CheckReq> = frame(
                 &req,
@@ -144,7 +149,7 @@ mod ops {
         };
         drop(req);
         let now = DateTime::parse_from_rfc3339(&r.now).map_err(error)?;
-        let (reports, notes) =
+        let (reports, mut notes) =
             check_manifest(&docs, &m, &r.probes, &Options::new(now)).map_err(error)?;
         let mut requirements = BTreeMap::new();
         for rep in &reports {
@@ -155,10 +160,22 @@ mod ops {
                 continue;
             };
             // The first document that resolves the target answers for it.
-            if let Some(g) = docs
-                .iter()
-                .find_map(|d| GroupedViews::new(d, rf.clone()).ok())
-            {
+            let mut found = None;
+            for d in &docs {
+                match GroupedViews::new(d, rf.clone()) {
+                    Ok(g) => {
+                        found = Some(g);
+                        break;
+                    }
+                    // Too much to list: the reports say so, and so does a note.
+                    Err(opencrs::resolve::ResolveError::TooComplex(why)) => {
+                        notes.push(format!("{}: {why}", rep.target));
+                        break;
+                    }
+                    Err(_) => {}
+                }
+            }
+            if let Some(g) = found {
                 requirements.insert(rep.target.clone(), g);
             }
         }
@@ -180,6 +197,11 @@ mod ops {
     }
 
     fn try_resolve(req: Vec<u8>) -> Result<Vec<u8>, Vec<u8>> {
+        let bytes = req.len();
+        opencrs::budget::ensure(bytes, || try_resolve_within(req))
+    }
+
+    fn try_resolve_within(req: Vec<u8>) -> Result<Vec<u8>, Vec<u8>> {
         let (reference, d) = {
             let f: Frame<ResolveReq> = frame(&req, r#"{"ref": "...", "blobs": [spec]}"#)?;
             let [spec] = f.blobs.as_slice() else {
@@ -195,6 +217,12 @@ mod ops {
             .iter()
             .map(|q| q.view())
             .collect();
+        if let Some(why) = opencrs::budget::explain(Some(&d)) {
+            return Err(error(format!(
+                "{}: {why}",
+                opencrs::check::CODE_TOO_COMPLEX
+            )));
+        }
         Ok(json::to_string(&views).into_bytes())
     }
 

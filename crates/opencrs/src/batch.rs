@@ -14,7 +14,7 @@ use serde::ser::SerializeSeq;
 use serde::{Serialize, Serializer};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// Checks every file in a manifest against every target that one of `docs`
 /// describes. `probes` holds what could be read from each file, keyed by its
@@ -87,6 +87,15 @@ pub fn check_manifest_each(
     opt: &Options,
     mut sink: impl FnMut(Report),
 ) -> Result<(), Error> {
+    // The documents and the manifest set how much work all the checks
+    // together may do. Counted the same however many threads run them.
+    let budget = match crate::budget::current() {
+        Some(b) => b,
+        None => {
+            crate::budget::Budget::for_input(docs.iter().map(|d| d.size).sum::<usize>() + m.size)
+        }
+    };
+    let _outer = budget.install();
     // One unit of work per (file, target) pair.
     let pairs: Vec<(&CreativeFile, &String)> = m
         .files
@@ -94,6 +103,7 @@ pub fn check_manifest_each(
         .flat_map(|f| f.targets.iter().map(move |t| (f, t)))
         .collect();
     let one = |&(f, target): &(&CreativeFile, &String)| -> Result<Vec<Report>, Error> {
+        let _g = budget.install();
         let input = Input {
             file: f,
             campaign: m.campaign.as_ref(),
@@ -157,6 +167,10 @@ impl LintResult {
 /// given) and, for a valid screens.json, runs `check_document`. An error
 /// means the document couldn't be read at all.
 pub fn lint(raw: &[u8], kind: Option<Kind>, opt: &SchemaOptions) -> Result<LintResult, Error> {
+    crate::budget::ensure(raw.len(), || lint_within(raw, kind, opt))
+}
+
+fn lint_within(raw: &[u8], kind: Option<Kind>, opt: &SchemaOptions) -> Result<LintResult, Error> {
     let kind = match kind {
         Some(k) => k,
         None => detect_kind(raw)?,
@@ -173,6 +187,10 @@ pub fn lint(raw: &[u8], kind: Option<Kind>, opt: &SchemaOptions) -> Result<LintR
         // is never decoded whole.
         if let Some(checks) = std::str::from_utf8(raw).ok().and_then(check_document_text) {
             res.document_checks = checks;
+        }
+        // The checks stopped short: say so beside what they found.
+        if let Some(why) = crate::budget::explain(None) {
+            res.document_checks.push(Check::too_complex(why));
         }
     }
     Ok(res)
@@ -205,17 +223,40 @@ impl<'a> GroupedViews<'a> {
         let mut firsts = Vec::new();
         let mut screens: Vec<Vec<String>> = Vec::new();
         let mut at = 0usize;
+        let mut listed: HashSet<String> = HashSet::new();
+        let mut by_key: HashMap<[u8; 32], usize> = HashMap::new();
         doc.resolve_each(&target, |q| {
-            let mut v = q.view();
-            let id = std::mem::take(&mut v.screen);
-            let print: [u8; 32] =
-                Sha256::digest(serde_json::to_vec(&v).expect("a view is serialisable")).into();
-            let g = *seen.entry(print).or_insert_with(|| {
-                firsts.push(at);
-                screens.push(Vec::new());
-                firsts.len() - 1
-            });
-            if !id.is_empty() {
+            let has_screen = q.screen.is_some();
+            let id = q.screen_id().to_string();
+            // A screen is listed once, by id, as a lookup by id finds one;
+            // a screen with an empty id is listed (as "") like any other.
+            if has_screen && !listed.insert(id.clone()) {
+                at += 1;
+                return;
+            }
+            // Screens with the same requirements have the same view, which
+            // is worked out once, not for each of them.
+            let key = q.fingerprint();
+            let g = match key.and_then(|k| by_key.get(&k).copied()) {
+                Some(g) => g,
+                None => {
+                    let mut v = q.view();
+                    v.screen.clear();
+                    let print: [u8; 32] =
+                        Sha256::digest(serde_json::to_vec(&v).expect("a view is serialisable"))
+                            .into();
+                    let g = *seen.entry(print).or_insert_with(|| {
+                        firsts.push(at);
+                        screens.push(Vec::new());
+                        firsts.len() - 1
+                    });
+                    if let Some(k) = key {
+                        by_key.insert(k, g);
+                    }
+                    g
+                }
+            };
+            if has_screen {
                 screens[g].push(id);
             }
             at += 1;
@@ -242,20 +283,24 @@ impl Serialize for GroupedViews<'_> {
         let mut seq = ser.serialize_seq(Some(self.firsts.len()))?;
         let (mut at, mut next) = (0usize, 0usize);
         let mut err = None;
-        let resolved = self.doc.resolve_each(&self.target, |q| {
-            if err.is_none() && self.firsts.get(next) == Some(&at) {
-                let mut view = q.view();
-                view.screen.clear();
-                let g = Group {
-                    screens: &self.screens[next],
-                    view,
-                };
-                if let Err(e) = seq.serialize_element(&g) {
-                    err = Some(e);
+        // The first pass settled the work; this one repeats it, so it is not
+        // counted again (and can't run the budget out part way through).
+        let resolved = crate::budget::unmetered(|| {
+            self.doc.resolve_each(&self.target, |q| {
+                if err.is_none() && self.firsts.get(next) == Some(&at) {
+                    let mut view = q.view();
+                    view.screen.clear();
+                    let g = Group {
+                        screens: &self.screens[next],
+                        view,
+                    };
+                    if let Err(e) = seq.serialize_element(&g) {
+                        err = Some(e);
+                    }
+                    next += 1;
                 }
-                next += 1;
-            }
-            at += 1;
+                at += 1;
+            })
         });
         use serde::ser::Error as _;
         match (err, resolved) {
@@ -296,6 +341,16 @@ pub struct RequirementsView {
 impl Requirements<'_> {
     /// Summarises the requirements for display.
     pub fn view(&self) -> RequirementsView {
+        crate::budget::charge(
+            crate::budget::Work::Views,
+            self.network as *const _ as usize,
+            (self.rules.required_elements.len()
+                + self.rules.rule_packs.len()
+                + self.rules.restricted_categories.len()
+                + self.blocked_regions.len()
+                + 8) as u64
+                * 24,
+        );
         let mut derived = BTreeMap::new();
         for (name, class) in [
             ("min_key_cap_height", TextClass::Key),
@@ -341,6 +396,10 @@ mod tests {
     use crate::json;
     use crate::testutil::{harbourline, test_now};
 
+    fn n_id(d: &Document) -> String {
+        d.networks[0].screens[0].id.clone()
+    }
+
     /// Grouped views expand to exactly the per-screen views, and screens
     /// that differ only by id share an entry.
     #[test]
@@ -385,6 +444,30 @@ mod tests {
             want.as_object_mut().unwrap().remove("screen");
             assert_eq!(entry, want, "{id}");
         }
+        // A repeated id is listed once, and an empty id is listed.
+        let mut odd = harbourline();
+        let n = &mut odd.networks[0];
+        let (a, b) = (n.screens[0].clone(), n.screens[1].clone());
+        n.screens = vec![a.clone(), a, b];
+        n.screens[2].id = String::new();
+        let rf = parse_ref(&format!(
+            "harbourline.example/retail/{}",
+            n.screens[0].format
+        ))
+        .unwrap();
+        let g = GroupedViews::new(&odd, rf).unwrap();
+        let v: Vec<Value> = serde_json::from_str(&json::to_string(&g)).unwrap();
+        let ids: Vec<_> = v
+            .iter()
+            .flat_map(|e| {
+                e["screens"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|s| s.as_str().unwrap().to_string())
+            })
+            .collect();
+        assert_eq!(ids, [n_id(&odd), String::new()]);
         // A format no screen uses is one entry with no screens.
         let mut empty = harbourline();
         empty.networks[0].screens.clear();

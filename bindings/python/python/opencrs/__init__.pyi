@@ -8,7 +8,7 @@ class OpenCRSError(ValueError): ...
 def version() -> str: ...
 
 DocumentKind = Literal["index", "screens", "creative", "report", "rule-pack"]
-Severity = Literal["error", "warning", "info"]
+Severity = Literal["error", "warning", "info", "not_checked"]
 Outcome = Literal["pass", "warn", "fail", "incomplete"]
 
 class SchemaError(TypedDict):

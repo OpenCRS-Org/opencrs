@@ -487,7 +487,7 @@ impl<'a> Checker<'a> {
     fn required_elements(&mut self) {
         let req: &'a Requirements<'a> = self.req;
         let file: &'a CreativeFile = self.file;
-        for want in &req.rules.required_elements {
+        for want in req.rules.required_elements.iter() {
             let mut what = title(&want.role);
             if !want.when.is_empty() {
                 what += &format!(" (on {} creative)", want.when);
@@ -610,7 +610,7 @@ impl<'a> Checker<'a> {
             );
             return;
         }
-        for r in restricted {
+        for r in restricted.iter() {
             if category_within(cat, r) {
                 self.report(
                     CODE_CATEGORY,

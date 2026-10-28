@@ -177,6 +177,18 @@ pub fn check_publisher(
     missing: &str,
     now: DateTime<FixedOffset>,
 ) -> PublisherCheck {
+    let bytes = pages.values().map(|p| p.body.len()).sum();
+    crate::budget::ensure(bytes, || {
+        check_publisher_within(domain, pages, missing, now)
+    })
+}
+
+fn check_publisher_within(
+    domain: &str,
+    pages: &BTreeMap<String, Page>,
+    missing: &str,
+    now: DateTime<FixedOffset>,
+) -> PublisherCheck {
     let domain = domain.to_ascii_lowercase();
     let mut res = PublisherCheck {
         index_url: index_url(&domain, false),

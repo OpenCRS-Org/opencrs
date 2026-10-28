@@ -29,6 +29,10 @@ pub struct Document {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub expires_at: String,
     pub networks: Vec<Network>,
+    /// The size in bytes of the text this was decoded from, which sets how
+    /// much work the validator will do for it; 0 if not decoded from text.
+    #[serde(skip)]
+    pub size: usize,
 }
 
 /// A set of screens sold or managed together.
@@ -442,6 +446,9 @@ pub struct Manifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub campaign: Option<Campaign>,
     pub files: Vec<CreativeFile>,
+    /// The size in bytes of the text this was decoded from; 0 if none.
+    #[serde(skip)]
+    pub size: usize,
 }
 
 /// The advertiser and what the creative contains.

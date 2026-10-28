@@ -413,3 +413,41 @@ func TestOversizedRequestIsRefusedBeforeAllocating(t *testing.T) {
 		t.Errorf("Resolve: err = %v", err)
 	}
 }
+
+// A reader that is fine for the hash and fails on the probe's range reads.
+type panicReaderAt struct {
+	data  []byte
+	calls int
+}
+
+func (r *panicReaderAt) ReadAt(p []byte, off int64) (int, error) {
+	r.calls++
+	if r.calls > 1 {
+		panic("reader failed")
+	}
+	return bytesReaderAt(r.data).ReadAt(p, off)
+}
+
+func TestPanickingReaderDoesNotPoolTheInstance(t *testing.T) {
+	idleMu.Lock()
+	idle = nil
+	idleMu.Unlock()
+	png := harbourline(t, "lunch-portrait.png")
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Error("the reader's panic should reach the caller")
+			}
+		}()
+		_, _ = Probe(&panicReaderAt{data: png}, int64(len(png)))
+	}()
+	idleMu.Lock()
+	n := len(idle)
+	idleMu.Unlock()
+	if n != 0 {
+		t.Errorf("%d idle instances after a panic, want 0", n)
+	}
+	if got := Version(); got != "0.1" {
+		t.Errorf("Version() = %q", got)
+	}
+}
