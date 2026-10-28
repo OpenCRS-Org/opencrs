@@ -67,4 +67,5 @@ github-attestations = true
 # container has no clang-cl for ring's assembly.
 [dist.github-custom-runners]
 aarch64-pc-windows-msvc = "windows-11-arm"
-aarch64-apple-darwin = "macos-15"
+# Cross-built on an Intel Mac: the Apple Silicon runners are short of capacity.
+aarch64-apple-darwin = "macos-15-intel"
