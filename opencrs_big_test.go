@@ -82,10 +82,54 @@ func TestLintAndCheckLargeDocument(t *testing.T) {
 	if len(res.Reports) != 2 {
 		t.Fatalf("got %d reports, want 2", len(res.Reports))
 	}
-	if n := len(res.Requirements["big.example/net/fmt-0"]); n != 190000 {
-		t.Fatalf("format target covers %d screens, want 190000", n)
+	groups := res.Requirements["big.example/net/fmt-0"]
+	total := 0
+	for _, g := range groups {
+		total += len(g.Screens)
+	}
+	// Screens differ only by venue, so there is an entry for each.
+	if total != 190000 || len(groups) != 500 {
+		t.Fatalf("format target has %d entries covering %d screens, want 500 covering 190000", len(groups), total)
 	}
 	if took := time.Since(start); took > 2*time.Minute {
 		t.Errorf("check took %v", took)
+	}
+}
+
+// A document built to make the checks do far more work than its size
+// warrants stops with CRS-TOO-COMPLEX and a reason, not a crash or a hang.
+func TestComplexDocumentStopsWithAReason(t *testing.T) {
+	var b strings.Builder
+	b.WriteString(`{"opencrs":"0.1","publisher":"x.example","updated_at":"2026-10-20T09:00:00+11:00","networks":[{"id":"n","name":"N","rules":{"required_elements":[`)
+	for i := range 2000 {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		fmt.Fprintf(&b, `{"role":"r%d","min_cap_height_mm":1}`, i)
+	}
+	b.WriteString(`]},"formats":[{"id":"f","pixels":[1080,1920],"media":{"static":["image/png"]}}],"screens":[`)
+	for i := range 6000 {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		fmt.Fprintf(&b, `{"id":"s%d","format":"f","viewing":{"distance_m":[1,%d],"dwell_s":%d},"placement":{"zone":"z%d"}}`, i, 2+i%900, 1+i%40, i)
+	}
+	b.WriteString(`]}]}`)
+	manifest := `{"opencrs":"0.1","files":[{"file":"a.png","media_type":"image/png","pixels":[1080,1920],"targets":["x.example/n/f"]}]}`
+	res, err := Check([][]byte{[]byte(b.String())}, []byte(manifest), nil, time.Date(2026, 10, 28, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found *Finding
+	for i, c := range res.Reports[0].Checks {
+		if c.Code == CodeTooComplex {
+			found = &res.Reports[0].Checks[i]
+		}
+	}
+	if found == nil || found.Severity != "not_checked" || res.Reports[0].Result != "incomplete" {
+		t.Fatalf("no CRS-TOO-COMPLEX finding: %+v", res.Reports[0])
+	}
+	if !strings.Contains(found.Message, "2,000 required elements") || !strings.Contains(found.Message, "/networks/0/rules/required_elements") {
+		t.Errorf("the reason doesn't say where the work came from: %s", found.Message)
 	}
 }

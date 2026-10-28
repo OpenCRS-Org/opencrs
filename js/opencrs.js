@@ -174,7 +174,13 @@ export async function load(source) {
       }
     },
     /** resolve(spec, ref) returns the requirements for a format or screen reference. */
-    resolve: (spec, ref) => callFramed("opencrs_resolve", { ref }, [spec]),
+    resolve(spec, ref) {
+      try {
+        return callFramed("opencrs_resolve", { ref }, [spec]);
+      } catch (e) {
+        return errorJSON(e);
+      }
+    },
     /**
      * legibility({distance_m: [near, far], ratio?, screen?: {width_mm, width_px},
      * dwell_s?, rate?}) gives minimum text sizes and the word limit, worked out

@@ -26,7 +26,7 @@
 mod ops {
     use chrono::DateTime;
     use opencrs::SPEC_VERSION;
-    use opencrs::batch::{RequirementsView, check_manifest, lint as lint_document};
+    use opencrs::batch::{GroupedViews, check_manifest, lint as lint_document};
     use opencrs::calc::{self, ScreenWidth};
     use opencrs::json;
     use opencrs::load::{decode_document, decode_manifest};
@@ -35,6 +35,7 @@ mod ops {
     use opencrs::report::{Options, Report};
     use opencrs::resolve::parse_ref;
     use opencrs::schema::SchemaOptions;
+    use opencrs::stream::Resolved;
     use serde::{Deserialize, Serialize};
     use serde_json::{Value, json};
     use std::cell::RefCell;
@@ -83,6 +84,9 @@ mod ops {
             blobs.push(blob);
             rest = tail;
         }
+        if !rest.is_empty() {
+            return Err(bad());
+        }
         Ok(Frame {
             header: parse(head, usage)?,
             blobs,
@@ -116,39 +120,18 @@ mod ops {
         reports: Vec<Report>,
         #[serde(skip_serializing_if = "Vec::is_empty")]
         notes: Vec<String>,
-        /// Each report's target to the screens it covers, for drawing proofs.
-        requirements: BTreeMap<String, Views<'a>>,
-    }
-
-    /// The views of the screens a reference covers, worked out as they are
-    /// written, so a format of hundreds of thousands of screens is never
-    /// held as views.
-    struct Views<'a> {
-        doc: &'a opencrs::model::Document,
-        target: opencrs::resolve::Ref,
-    }
-
-    impl Serialize for Views<'_> {
-        fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
-            use serde::ser::{Error as _, SerializeSeq};
-            let mut seq = ser.serialize_seq(None)?;
-            let mut err = None;
-            let resolved = self.doc.resolve_each(&self.target, |q| {
-                if err.is_none()
-                    && let Err(e) = seq.serialize_element(&q.view())
-                {
-                    err = Some(e);
-                }
-            });
-            match (err, resolved) {
-                (Some(e), _) => Err(e),
-                (None, Err(e)) => Err(S::Error::custom(e)),
-                (None, Ok(())) => seq.end(),
-            }
-        }
+        /// Each report's target to the screens it covers, for drawing proofs:
+        /// entries of `{"screens": [ids], ...requirements}`, one for each
+        /// distinct set of requirements.
+        requirements: BTreeMap<String, GroupedViews<'a>>,
     }
 
     fn try_check(req: Vec<u8>) -> Result<Vec<u8>, Vec<u8>> {
+        let bytes = req.len();
+        opencrs::budget::ensure(bytes, || try_check_within(req))
+    }
+
+    fn try_check_within(req: Vec<u8>) -> Result<Vec<u8>, Vec<u8>> {
         let (r, docs, m) = {
             let f: Frame<CheckReq> = frame(
                 &req,
@@ -167,7 +150,7 @@ mod ops {
         };
         drop(req);
         let now = DateTime::parse_from_rfc3339(&r.now).map_err(error)?;
-        let (reports, notes) =
+        let (reports, mut notes) =
             check_manifest(&docs, &m, &r.probes, &Options::new(now)).map_err(error)?;
         let mut requirements = BTreeMap::new();
         for rep in &reports {
@@ -178,8 +161,23 @@ mod ops {
                 continue;
             };
             // The first document that resolves the target answers for it.
-            if let Some(doc) = docs.iter().find(|d| d.resolve_each(&rf, |_| {}).is_ok()) {
-                requirements.insert(rep.target.clone(), Views { doc, target: rf });
+            let mut found = None;
+            for d in &docs {
+                match GroupedViews::new(d, rf.clone()) {
+                    Ok(g) => {
+                        found = Some(g);
+                        break;
+                    }
+                    // Too much to list: the reports say so, and so does a note.
+                    Err(opencrs::resolve::ResolveError::TooComplex(why)) => {
+                        notes.push(format!("{}: {why}", rep.target));
+                        break;
+                    }
+                    Err(_) => {}
+                }
+            }
+            if let Some(g) = found {
+                requirements.insert(rep.target.clone(), g);
             }
         }
         Ok(json::to_bytes_sized(&CheckResult {
@@ -197,25 +195,39 @@ mod ops {
     struct ResolveReq {
         #[serde(rename = "ref")]
         reference: String,
+        /// Answer as the distinct views and each screen's view and id
+        /// (`Resolved::grouped`) rather than one view per screen, for a
+        /// caller that puts them together itself.
+        #[serde(default)]
+        grouped: bool,
     }
 
     fn try_resolve(req: Vec<u8>) -> Result<Vec<u8>, Vec<u8>> {
-        let (reference, d) = {
-            let f: Frame<ResolveReq> = frame(&req, r#"{"ref": "...", "blobs": [spec]}"#)?;
+        let bytes = req.len();
+        opencrs::budget::ensure(bytes, || try_resolve_within(req))
+    }
+
+    fn try_resolve_within(req: Vec<u8>) -> Result<Vec<u8>, Vec<u8>> {
+        // The document is read a screen at a time and never decoded whole,
+        // and only the distinct views are built; the request is freed before
+        // the answer is written, so at no point are both in memory.
+        let (grouped, resolved) = {
+            let f: Frame<ResolveReq> =
+                frame(&req, r#"{"ref": "...", "grouped"?: bool, "blobs": [spec]}"#)?;
             let [spec] = f.blobs.as_slice() else {
                 return Err(error("usage: resolve needs one spec"));
             };
-            (f.header.reference, decode_document(spec).map_err(error)?)
+            (
+                f.header.grouped,
+                Resolved::from_text(spec, &f.header.reference).map_err(error)?,
+            )
         };
         drop(req);
-        let rf = parse_ref(&reference).map_err(error)?;
-        let views: Vec<RequirementsView> = d
-            .resolve(&rf)
-            .map_err(error)?
-            .iter()
-            .map(|q| q.view())
-            .collect();
-        Ok(json::to_string(&views).into_bytes())
+        Ok(if grouped {
+            resolved.grouped()
+        } else {
+            resolved.per_screen()
+        })
     }
 
     pub fn resolve(req: Vec<u8>) -> Vec<u8> {
@@ -481,6 +493,14 @@ mod ops {
             short.pop();
             assert!(
                 val(check(short))["error"]
+                    .as_str()
+                    .unwrap()
+                    .contains("frame")
+            );
+            let mut long = r;
+            long.push(b' ');
+            assert!(
+                val(check(long))["error"]
                     .as_str()
                     .unwrap()
                     .contains("frame")

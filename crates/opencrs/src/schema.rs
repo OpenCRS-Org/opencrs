@@ -95,20 +95,70 @@ struct Items {
     screen: Validator,
 }
 
+/// The schemas, parsed and registered once. A validator is built the first
+/// time its kind is checked, so a process (or a fresh module instance) that
+/// lints one kind of document doesn't pay for compiling them all.
 struct Compiled {
-    kinds: Vec<(Kind, Validator)>,
-    items: Items,
+    registry: Registry<'static>,
+    docs: Vec<(&'static str, Value)>,
+    kinds: Vec<(Kind, OnceLock<Result<Validator, String>>)>,
+    items: OnceLock<Result<Items, String>>,
+}
+
+impl Compiled {
+    fn validator(&self, kind: Kind) -> Result<&Validator, Error> {
+        let (_, cell) = self
+            .kinds
+            .iter()
+            .find(|(k, _)| *k == kind)
+            .ok_or_else(|| Error::msg("unknown document kind"))?;
+        cell.get_or_init(|| {
+            let name = format!("{}.schema.json", kind.as_str());
+            let (_, doc) = self
+                .docs
+                .iter()
+                .find(|(n, _)| *n == name)
+                .ok_or("missing schema")?;
+            jsonschema::options()
+                .with_registry(&self.registry)
+                .build(doc)
+                .map_err(|e| e.to_string())
+        })
+        .as_ref()
+        .map_err(|e| Error::Message(format!("loading schemas: {e}")))
+    }
+
+    fn items(&self) -> Result<&Items, Error> {
+        self.items
+            .get_or_init(|| {
+                let item = |def: &str| {
+                    jsonschema::options()
+                        .with_registry(&self.registry)
+                        .build(&serde_json::json!({
+                            "$ref": format!("{BASE_URL}screens.schema.json#/$defs/{def}")
+                        }))
+                        .map_err(|e| e.to_string())
+                };
+                Ok(Items {
+                    venue: item("venue")?,
+                    format: item("format")?,
+                    screen: item("screen")?,
+                })
+            })
+            .as_ref()
+            .map_err(|e| Error::Message(format!("loading schemas: {e}")))
+    }
 }
 
 fn schemas() -> Result<&'static Compiled, Error> {
     static COMPILED: OnceLock<Result<Compiled, String>> = OnceLock::new();
     COMPILED
-        .get_or_init(compile)
+        .get_or_init(register)
         .as_ref()
         .map_err(|e| Error::Message(format!("loading schemas: {e}")))
 }
 
-fn compile() -> Result<Compiled, String> {
+fn register() -> Result<Compiled, String> {
     let mut builder = Registry::new();
     let mut docs = Vec::new();
     for (name, text) in SCHEMA_FILES {
@@ -119,34 +169,11 @@ fn compile() -> Result<Compiled, String> {
         docs.push((name, v));
     }
     let registry = builder.prepare().map_err(|e| e.to_string())?;
-    let mut out = Vec::new();
-    for kind in Kind::ALL {
-        let name = format!("{}.schema.json", kind.as_str());
-        let (_, doc) = docs
-            .iter()
-            .find(|(n, _)| *n == name)
-            .ok_or("missing schema")?;
-        let v = jsonschema::options()
-            .with_registry(&registry)
-            .build(doc)
-            .map_err(|e| e.to_string())?;
-        out.push((kind, v));
-    }
-    let item = |def: &str| {
-        jsonschema::options()
-            .with_registry(&registry)
-            .build(&serde_json::json!({
-                "$ref": format!("{BASE_URL}screens.schema.json#/$defs/{def}")
-            }))
-            .map_err(|e| e.to_string())
-    };
     Ok(Compiled {
-        kinds: out,
-        items: Items {
-            venue: item("venue")?,
-            format: item("format")?,
-            screen: item("screen")?,
-        },
+        registry,
+        docs,
+        kinds: Kind::ALL.iter().map(|&k| (k, OnceLock::new())).collect(),
+        items: OnceLock::new(),
     })
 }
 
@@ -155,18 +182,24 @@ fn compile() -> Result<Compiled, String> {
 pub fn detect_kind(raw: &[u8]) -> Result<Kind, Error> {
     // The top-level keys are all that's needed, so read them without
     // building the document: its values stay unparsed slices of `raw`.
-    let keys = serde_json::from_slice::<RawMap>(raw)
-        .ok()
-        .map(|m| m.into_keys().collect::<Vec<_>>())
-        .or_else(|| {
-            let list = serde_json::from_slice::<Vec<&RawValue>>(raw).ok()?;
-            let m: RawMap = serde_json::from_str(list.first()?.get()).ok()?;
-            Some(m.into_keys().collect())
-        });
+    let text = std::str::from_utf8(raw).ok();
+    let keys = match text {
+        Some(t) => serde_json::from_str::<RawMap>(t).ok(),
+        None => serde_json::from_slice::<RawMap>(raw).ok(),
+    }
+    .map(|m| m.into_keys().collect::<Vec<_>>())
+    .or_else(|| {
+        let list = match text {
+            Some(t) => serde_json::from_str::<Vec<&RawValue>>(t).ok()?,
+            None => serde_json::from_slice::<Vec<&RawValue>>(raw).ok()?,
+        };
+        let m: RawMap = serde_json::from_str(list.first()?.get()).ok()?;
+        Some(m.into_keys().collect())
+    });
     if let Some(keys) = keys {
         return kind_of(|k| keys.iter().any(|x| x == k));
     }
-    let mut v: Value = serde_json::from_slice(raw)?;
+    let mut v: Value = parse_value(raw)?;
     if let Some(first) = v.as_array().and_then(|a| a.first()) {
         v = first.clone();
     }
@@ -230,19 +263,32 @@ pub fn validate_schema(
     raw: &[u8],
     opt: &SchemaOptions,
 ) -> Result<Vec<SchemaError>, Error> {
+    validate_detecting(Some(kind), raw, opt).map(|(_, errs)| errs)
+}
+
+/// [`validate_schema`], telling the document's kind first when none is
+/// given. A screens document (the big kind) is told apart and validated in
+/// one reading of its text: its top-level keys come out of that reading,
+/// so it isn't scanned once more to find them.
+pub(crate) fn validate_detecting(
+    kind: Option<Kind>,
+    raw: &[u8],
+    opt: &SchemaOptions,
+) -> Result<(Kind, Vec<SchemaError>), Error> {
     let all = schemas()?;
-    let validator = &all
-        .kinds
-        .iter()
-        .find(|(k, _)| *k == kind)
-        .ok_or_else(|| Error::msg("unknown document kind"))?
-        .1;
-    if kind == Kind::Screens
-        && let Some(errs) = validate_screens_by_item(&all.items, validator, raw)
+    if kind.is_none_or(|k| k == Kind::Screens)
+        && let Some((errs, is_screens)) =
+            validate_screens_by_item(all.items()?, all.validator(Kind::Screens)?, raw)
+        && (kind.is_some() || is_screens)
     {
-        return Ok(errs);
+        return Ok((Kind::Screens, errs));
     }
-    let v: Value = serde_json::from_slice(raw)?;
+    let kind = match kind {
+        Some(k) => k,
+        None => detect_kind(raw)?,
+    };
+    let validator = all.validator(kind)?;
+    let v: Value = parse_value(raw)?;
     let prepare = |mut v: Value| {
         if kind == Kind::Index && opt.allow_local_http {
             secure_local_urls(&mut v);
@@ -258,9 +304,18 @@ pub fn validate_schema(
                     out.push(e);
                 }
             }
-            Ok(out)
+            Ok((kind, out))
         }
-        v => Ok(validate_value(validator, &prepare(v))),
+        v => Ok((kind, validate_value(validator, &prepare(v)))),
+    }
+}
+
+/// Parses `raw` as a `Value`. Text that is UTF-8 throughout (checked once,
+/// quickly) is read as text, so each string in it isn't checked again.
+fn parse_value(raw: &[u8]) -> Result<Value, serde_json::Error> {
+    match std::str::from_utf8(raw) {
+        Ok(text) => serde_json::from_str(text),
+        Err(_) => serde_json::from_slice(raw),
     }
 }
 
@@ -348,69 +403,272 @@ type RawMap<'a> = std::collections::BTreeMap<String, &'a RawValue>;
 /// several times the size of the text. The venues, formats and screens of
 /// each network are arrays whose items the schema checks independently
 /// (nothing in it looks at their count or compares them), so each is
-/// validated alone and the rest of the document, with those arrays emptied,
-/// is validated as a whole. The errors, paths and order are those of
-/// validating the whole document.
+/// validated alone, as it is read, and the rest of the document, with those
+/// arrays emptied, is validated as a whole. The errors, paths and order are
+/// those of validating the whole document, and the text is read once.
 ///
 /// None means the document isn't shaped for this (or isn't valid JSON), and
 /// the caller validates it the ordinary way, which also gives the usual
-/// parse error.
+/// parse error. With the errors comes whether the document's top-level keys
+/// say it is a screens document at all (see [`detect_kind`]).
 fn validate_screens_by_item(
     items: &Items,
     validator: &Validator,
     raw: &[u8],
-) -> Option<Vec<SchemaError>> {
-    let mut root: RawMap = serde_json::from_slice(raw).ok()?;
+) -> Option<(Vec<SchemaError>, bool)> {
     let mut found = Vec::new();
-    let mut skeleton = serde_json::Map::new();
-    for (key, text) in std::mem::take(&mut root) {
-        if key != "networks" {
-            skeleton.insert(key, serde_json::from_str(text.get()).ok()?);
-            continue;
-        }
-        let Ok(networks) = serde_json::from_str::<Vec<&RawValue>>(text.get()) else {
-            skeleton.insert(key, serde_json::from_str(text.get()).ok()?);
-            continue;
+    let skeleton = {
+        let seed = by_item::Root {
+            items,
+            found: &mut found,
         };
-        let mut shells = Vec::with_capacity(networks.len());
-        for (n, net) in networks.into_iter().enumerate() {
-            let Ok(mut fields) = serde_json::from_str::<RawMap>(net.get()) else {
-                shells.push(serde_json::from_str(net.get()).ok()?);
-                continue;
-            };
-            let mut shell = serde_json::Map::new();
-            for (name, validator) in [
-                ("venues", &items.venue),
-                ("formats", &items.format),
-                ("screens", &items.screen),
-            ] {
-                let Some(text) = fields.remove(name) else {
-                    continue;
-                };
-                let Ok(list) = serde_json::from_str::<Vec<&RawValue>>(text.get()) else {
-                    shell.insert(name.into(), serde_json::from_str(text.get()).ok()?);
-                    continue;
-                };
-                shell.insert(name.into(), Value::Array(Vec::new()));
-                for (i, item) in list.into_iter().enumerate() {
-                    let v: Value = serde_json::from_str(item.get()).ok()?;
-                    collect_errors(
-                        validator,
-                        &v,
-                        &format!("/networks/{n}/{name}/{i}"),
-                        &mut found,
-                    );
-                }
+        match std::str::from_utf8(raw) {
+            Ok(text) => {
+                let mut de = serde_json::Deserializer::from_str(text);
+                let v = serde::de::DeserializeSeed::deserialize(seed, &mut de).ok()?;
+                de.end().ok()?;
+                v
             }
-            for (name, text) in fields {
-                shell.insert(name, serde_json::from_str(text.get()).ok()?);
+            Err(_) => {
+                let mut de = serde_json::Deserializer::from_slice(raw);
+                let v = serde::de::DeserializeSeed::deserialize(seed, &mut de).ok()?;
+                de.end().ok()?;
+                v
             }
-            shells.push(Value::Object(shell));
         }
-        skeleton.insert(key, Value::Array(shells));
+    };
+    let is_screens = skeleton
+        .as_object()
+        .is_some_and(|m| matches!(kind_of(|k| m.contains_key(k)), Ok(Kind::Screens)));
+    collect_errors(validator, &skeleton, "", &mut found);
+    Some((drop_under_branches(found), is_screens))
+}
+
+/// The seeded visitors of [`validate_screens_by_item`]: the document is
+/// read into a `Value` with each network's venue, format and screen lists
+/// left empty, their items validated and dropped as they go by.
+mod by_item {
+    use super::{Items, collect_errors};
+    use jsonschema::Validator;
+    use serde::de::value::{MapAccessDeserializer, SeqAccessDeserializer};
+    use serde::de::{DeserializeSeed, Deserializer, MapAccess, SeqAccess, Visitor};
+    use serde_json::Value;
+    use std::fmt;
+
+    type Found = Vec<(String, String, bool)>;
+
+    /// The document: an object, or it isn't shaped for this.
+    pub(super) struct Root<'s> {
+        pub(super) items: &'s Items,
+        pub(super) found: &'s mut Found,
     }
-    collect_errors(validator, &Value::Object(skeleton), "", &mut found);
-    Some(drop_under_branches(found))
+
+    impl<'de> DeserializeSeed<'de> for Root<'_> {
+        type Value = Value;
+        fn deserialize<D: Deserializer<'de>>(self, de: D) -> Result<Value, D::Error> {
+            de.deserialize_map(self)
+        }
+    }
+
+    impl<'de> Visitor<'de> for Root<'_> {
+        type Value = Value;
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str("a document")
+        }
+        fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Value, A::Error> {
+            let mut obj = serde_json::Map::new();
+            // A repeated key keeps its last value, as a `Value` does: the
+            // errors found in an earlier value of `networks` are dropped.
+            let mut networks_errors: Option<std::ops::Range<usize>> = None;
+            while let Some(key) = map.next_key::<String>()? {
+                let value = if key == "networks" {
+                    if let Some(r) = networks_errors.take() {
+                        self.found.drain(r);
+                    }
+                    let start = self.found.len();
+                    let v = map.next_value_seed(Networks {
+                        items: self.items,
+                        found: self.found,
+                    })?;
+                    networks_errors = Some(start..self.found.len());
+                    v
+                } else {
+                    map.next_value::<Value>()?
+                };
+                obj.insert(key, value);
+            }
+            Ok(Value::Object(obj))
+        }
+    }
+
+    /// The `networks` value: a list of networks, or whatever it is.
+    struct Networks<'s> {
+        items: &'s Items,
+        found: &'s mut Found,
+    }
+
+    impl<'de> DeserializeSeed<'de> for Networks<'_> {
+        type Value = Value;
+        fn deserialize<D: Deserializer<'de>>(self, de: D) -> Result<Value, D::Error> {
+            de.deserialize_any(self)
+        }
+    }
+
+    impl<'de> Visitor<'de> for Networks<'_> {
+        type Value = Value;
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str("networks")
+        }
+        fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Value, A::Error> {
+            let mut shells = Vec::new();
+            while let Some(shell) = seq.next_element_seed(Network {
+                items: self.items,
+                found: self.found,
+                n: shells.len(),
+            })? {
+                shells.push(shell);
+            }
+            Ok(Value::Array(shells))
+        }
+        fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<Value, A::Error> {
+            any_map(map)
+        }
+        scalar_visits!();
+    }
+
+    /// One network: an object whose three item lists are validated and
+    /// emptied, or whatever it is.
+    struct Network<'s> {
+        items: &'s Items,
+        found: &'s mut Found,
+        n: usize,
+    }
+
+    impl<'de> DeserializeSeed<'de> for Network<'_> {
+        type Value = Value;
+        fn deserialize<D: Deserializer<'de>>(self, de: D) -> Result<Value, D::Error> {
+            de.deserialize_any(self)
+        }
+    }
+
+    impl<'de> Visitor<'de> for Network<'_> {
+        type Value = Value;
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str("a network")
+        }
+        fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Value, A::Error> {
+            let mut obj = serde_json::Map::new();
+            // Per list, where its errors are, so a repeat of the key (whose
+            // value wins) drops the earlier ones.
+            let mut errors: [Option<std::ops::Range<usize>>; 3] = [None, None, None];
+            while let Some(key) = map.next_key::<String>()? {
+                let which = ["venues", "formats", "screens"]
+                    .iter()
+                    .position(|k| *k == key);
+                let value = match which {
+                    Some(w) => {
+                        if let Some(r) = errors[w].take() {
+                            self.found.drain(r);
+                        }
+                        let validator = match w {
+                            0 => &self.items.venue,
+                            1 => &self.items.format,
+                            _ => &self.items.screen,
+                        };
+                        let start = self.found.len();
+                        let v = map.next_value_seed(List {
+                            validator,
+                            found: self.found,
+                            prefix: format!("/networks/{}/{key}", self.n),
+                        })?;
+                        errors[w] = Some(start..self.found.len());
+                        v
+                    }
+                    None => map.next_value::<Value>()?,
+                };
+                obj.insert(key, value);
+            }
+            Ok(Value::Object(obj))
+        }
+        fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<Value, A::Error> {
+            any_seq(seq)
+        }
+        scalar_visits!();
+    }
+
+    /// A list of items, each validated as it is read and then dropped, so
+    /// the list comes out empty; or whatever the value is.
+    struct List<'s> {
+        validator: &'s Validator,
+        found: &'s mut Found,
+        prefix: String,
+    }
+
+    impl<'de> DeserializeSeed<'de> for List<'_> {
+        type Value = Value;
+        fn deserialize<D: Deserializer<'de>>(self, de: D) -> Result<Value, D::Error> {
+            de.deserialize_any(self)
+        }
+    }
+
+    impl<'de> Visitor<'de> for List<'_> {
+        type Value = Value;
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str("a list")
+        }
+        fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Value, A::Error> {
+            let mut i = 0usize;
+            let mut path = self.prefix.clone();
+            while let Some(v) = seq.next_element::<Value>()? {
+                path.truncate(self.prefix.len());
+                path.push('/');
+                path.push_str(&i.to_string());
+                collect_errors(self.validator, &v, &path, self.found);
+                i += 1;
+            }
+            Ok(Value::Array(Vec::new()))
+        }
+        fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<Value, A::Error> {
+            any_map(map)
+        }
+        scalar_visits!();
+    }
+
+    fn any_map<'de, A: MapAccess<'de>>(map: A) -> Result<Value, A::Error> {
+        serde::Deserialize::deserialize(MapAccessDeserializer::new(map))
+    }
+
+    fn any_seq<'de, A: SeqAccess<'de>>(seq: A) -> Result<Value, A::Error> {
+        serde::Deserialize::deserialize(SeqAccessDeserializer::new(seq))
+    }
+
+    /// The scalar visits, each giving the value as it is.
+    macro_rules! scalar_visits {
+        () => {
+            fn visit_bool<E: serde::de::Error>(self, v: bool) -> Result<Value, E> {
+                Ok(Value::Bool(v))
+            }
+            fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<Value, E> {
+                Ok(Value::from(v))
+            }
+            fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<Value, E> {
+                Ok(Value::from(v))
+            }
+            fn visit_f64<E: serde::de::Error>(self, v: f64) -> Result<Value, E> {
+                Ok(Value::from(v))
+            }
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Value, E> {
+                Ok(Value::String(v.to_string()))
+            }
+            fn visit_string<E: serde::de::Error>(self, v: String) -> Result<Value, E> {
+                Ok(Value::String(v))
+            }
+            fn visit_unit<E: serde::de::Error>(self) -> Result<Value, E> {
+                Ok(Value::Null)
+            }
+        };
+    }
+    use scalar_visits;
 }
 
 /// A failing oneOf/anyOf is reported once, at its own node: drops anything
@@ -478,12 +736,7 @@ mod tests {
         let base: Value =
             serde_json::from_slice(&read("examples/harbourline/retail.screens.json")).unwrap();
         let all = schemas().unwrap();
-        let sv = &all
-            .kinds
-            .iter()
-            .find(|(k, _)| *k == Kind::Screens)
-            .unwrap()
-            .1;
+        let sv = all.validator(Kind::Screens).unwrap();
         let whole = |v: &Value| validate_value(sv, v);
         type Edit = Box<dyn Fn(&mut Value)>;
         let edits: Vec<Edit> = vec![
@@ -524,8 +777,8 @@ mod tests {
             let raw = serde_json::to_vec(&v).unwrap();
             let want = whole(&v);
             assert_eq!(
-                validate_screens_by_item(&all.items, sv, &raw),
-                Some(want.clone()),
+                validate_screens_by_item(all.items().unwrap(), sv, &raw),
+                Some((want.clone(), true)),
                 "edit {i}"
             );
             assert_eq!(
@@ -537,7 +790,7 @@ mod tests {
         // Text that isn't a document falls back to the usual path and error.
         for bad in [&b"{"[..], b"[]", b"7", b"{\"networks\":[1,"] {
             assert!(
-                validate_screens_by_item(&all.items, sv, bad).is_none()
+                validate_screens_by_item(all.items().unwrap(), sv, bad).is_none()
                     || serde_json::from_slice::<Value>(bad).is_ok(),
                 "{}",
                 String::from_utf8_lossy(bad)

@@ -9,7 +9,8 @@ export interface SchemaError {
   message: string;
 }
 
-export type Severity = "error" | "warning" | "info";
+/** `not_checked` is also used, for a finding such as CRS-TOO-COMPLEX. */
+export type Severity = "error" | "warning" | "info" | "not_checked";
 
 export interface Check {
   code: string;

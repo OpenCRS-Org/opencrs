@@ -3,6 +3,7 @@
 //! The one exception is the opt-in `fs` feature (`fs` module) for hosts.
 
 pub mod batch;
+pub mod budget;
 pub mod calc;
 pub mod check;
 pub mod checks;
@@ -24,6 +25,7 @@ pub mod report;
 pub mod resolve;
 pub mod rulepack;
 pub mod schema;
+pub mod stream;
 #[cfg(test)]
 mod testutil;
 

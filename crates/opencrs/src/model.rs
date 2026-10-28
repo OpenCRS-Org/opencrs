@@ -4,6 +4,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
+use std::sync::OnceLock;
 
 pub(crate) fn is_false(b: &bool) -> bool {
     !*b
@@ -28,6 +29,10 @@ pub struct Document {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub expires_at: String,
     pub networks: Vec<Network>,
+    /// The size in bytes of the text this was decoded from, which sets how
+    /// much work the validator will do for it; 0 if not decoded from text.
+    #[serde(skip)]
+    pub size: usize,
 }
 
 /// A set of screens sold or managed together.
@@ -43,6 +48,52 @@ pub struct Network {
     pub screens: Vec<Screen>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delivery: Option<Delivery>,
+    /// Built on first lookup; see [`Lookup`].
+    #[serde(skip)]
+    pub(crate) lookup: Lookup,
+}
+
+/// Indexes over a network's venues, formats and screens, built the first
+/// time a lookup needs one, so finding an id is a map lookup or a binary
+/// search, not a scan. Of repeated ids the first still wins, as it does for
+/// a scan. It is not part of the network's value: a clone starts without
+/// one, and two networks are equal whatever they have indexed. A lookup
+/// falls back to a scan if the list has a different length than when the
+/// index was built.
+#[derive(Default)]
+pub(crate) struct Lookup {
+    pub(crate) venues: OnceLock<ById>,
+    pub(crate) formats: OnceLock<ById>,
+    /// Positions ordered by id and then position.
+    pub(crate) screens: OnceLock<Vec<u32>>,
+    /// Screens by their format: positions ordered by format and then
+    /// position, so a format's screens are one run.
+    pub(crate) by_format: OnceLock<Vec<u32>>,
+}
+
+/// The first position of each id in a list, and the list's length when the
+/// index was built.
+pub(crate) struct ById {
+    pub(crate) by: std::collections::HashMap<String, u32>,
+    pub(crate) len: usize,
+}
+
+impl Clone for Lookup {
+    fn clone(&self) -> Self {
+        Lookup::default()
+    }
+}
+
+impl PartialEq for Lookup {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl fmt::Debug for Lookup {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Lookup")
+    }
 }
 
 /// A centre, airport or station.
@@ -404,6 +455,9 @@ pub struct Manifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub campaign: Option<Campaign>,
     pub files: Vec<CreativeFile>,
+    /// The size in bytes of the text this was decoded from; 0 if none.
+    #[serde(skip)]
+    pub size: usize,
 }
 
 /// The advertiser and what the creative contains.

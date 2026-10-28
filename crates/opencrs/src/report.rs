@@ -3,16 +3,17 @@
 
 use crate::SPEC_VERSION;
 use crate::check::*;
-use crate::checks::{Checker, gather_facts};
+use crate::checks::{Checker, Facts, gather_facts};
 use crate::error::Error;
 use crate::model::{Campaign, CreativeFile, Document};
 use crate::probe::Probe;
-use crate::resolve::{ResolveError, parse_ref};
+use crate::resolve::{Ref, Requirements, ResolveError, parse_ref};
 use crate::rulepack::{RulePacks, builtin_rule_packs};
 use chrono::{DateTime, FixedOffset, SecondsFormat};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
+use std::sync::Arc;
 
 /// A report's overall outcome.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -152,6 +153,126 @@ pub fn validate(
     target: &str,
     opt: &Options,
 ) -> Result<Report, ValidateError> {
+    crate::budget::ensure(doc.size, || validate_within(doc, input, target, opt))
+}
+
+fn validate_within(
+    doc: &Document,
+    input: &Input,
+    target: &str,
+    opt: &Options,
+) -> Result<Report, ValidateError> {
+    validate_with(doc, input, target, opt, None)
+}
+
+/// A target expanded once: the screens it covers, grouped by their
+/// requirements (apart from their id), with one requirements for each group
+/// and the screens of each in document order. Every file checked against
+/// the target is checked once per group and reads the screen lists off the
+/// expansion, so a campaign of many files on a format of many screens costs
+/// by its files times the kinds of screen, not times the screens.
+pub struct Expansion<'a> {
+    /// One group's requirements, in order of the groups' first screens.
+    reps: Vec<Requirements<'a>>,
+    /// For each group, the positions (in `ids`) of its screens, in order.
+    members: Vec<Vec<u32>>,
+    ids: Arc<Vec<String>>,
+    repeats: bool,
+    /// Every screen the target covers, counting those with no id.
+    screens: usize,
+    /// Why the target didn't resolve, if it didn't.
+    error: Option<ResolveError>,
+}
+
+impl<'a> Expansion<'a> {
+    /// Resolves and groups the screens `r` covers in `doc`. The work is
+    /// counted against the budget once, here.
+    pub fn new(doc: &'a Document, r: &Ref) -> Self {
+        let mut reps: Vec<Requirements<'a>> = Vec::new();
+        let mut members: Vec<Vec<u32>> = Vec::new();
+        let mut seen: HashMap<Vec<u8>, usize> = HashMap::new();
+        let mut key = Vec::new();
+        let mut table = ScreenTable::default();
+        let mut screens = 0usize;
+        let resolved = doc.resolve_each(r, |req| {
+            crate::budget::charge_flat(4);
+            screens += 1;
+            let pos = table.begin(req.screen_id());
+            key.clear();
+            let keyed = req.key(&mut key);
+            let g = match seen.get(key.as_slice()) {
+                Some(&g) if keyed => g,
+                _ => {
+                    if keyed {
+                        seen.insert(key.clone(), reps.len());
+                    }
+                    members.push(Vec::new());
+                    reps.push(req);
+                    reps.len() - 1
+                }
+            };
+            // A screen with no id can't be listed, but still counts.
+            if !table_id_empty(&table, pos) {
+                members[g].push(pos);
+            }
+        });
+        let (ids, repeats) = table.into_ids();
+        Expansion {
+            reps,
+            members,
+            ids: Arc::new(ids),
+            repeats,
+            screens,
+            error: resolved.err(),
+        }
+    }
+}
+
+#[cfg(test)]
+impl<'a> Expansion<'a> {
+    /// An expansion with a group for every screen, for checking that
+    /// grouping changes nothing.
+    fn ungrouped(doc: &'a Document, r: &Ref) -> Self {
+        let mut reps = Vec::new();
+        let mut members = Vec::new();
+        let mut table = ScreenTable::default();
+        let mut screens = 0usize;
+        let resolved = doc.resolve_each(r, |req| {
+            screens += 1;
+            let pos = table.begin(req.screen_id());
+            members.push(if req.screen_id().is_empty() {
+                Vec::new()
+            } else {
+                vec![pos]
+            });
+            reps.push(req);
+        });
+        let (ids, repeats) = table.into_ids();
+        Expansion {
+            reps,
+            members,
+            ids: Arc::new(ids),
+            repeats,
+            screens,
+            error: resolved.err(),
+        }
+    }
+}
+
+fn table_id_empty(table: &ScreenTable, pos: u32) -> bool {
+    table.id(pos).is_empty()
+}
+
+/// [`validate`] with the target's expansion already made (by
+/// [`check_manifest_each`](crate::batch::check_manifest_each), which shares
+/// one between the files that target it), or made here if not.
+pub(crate) fn validate_with(
+    doc: &Document,
+    input: &Input,
+    target: &str,
+    opt: &Options,
+    expansion: Option<&Expansion>,
+) -> Result<Report, ValidateError> {
     let r = parse_ref(target).map_err(|e| ValidateError::BadTarget(e.to_string()))?;
     if r.publisher != doc.publisher {
         return Err(ValidateError::OtherPublisher(target.to_string()));
@@ -161,30 +282,36 @@ pub fn validate(
     let sha256 = facts.sha256.clone();
     checks.extend(stale_check(doc, &opt.now));
 
-    // Each screen's findings are merged as they come, so a format with
-    // hundreds of thousands of screens never holds them all.
-    let mut merger = Merger::default();
-    let resolved = doc.resolve_each(&r, |req| {
-        let c = Checker {
-            req: &req,
-            file: input.file,
-            campaign: input.campaign,
-            facts: facts.clone(),
-            margin: opt.warn_margin,
-            rule_packs: opt.rule_packs,
-            out: Vec::new(),
-        };
-        merger.add(c.run(), req.screen_id());
-    });
-    match resolved {
-        Err(e) => {
-            let code = match e {
-                ResolveError::Reference(_) => CODE_REFERENCE,
-                ResolveError::Other(_) => CODE_TARGET,
-            };
-            checks.push(Check::new(code, Severity::Error, e.to_string()));
+    let own;
+    let exp = match expansion {
+        Some(e) => e,
+        None => {
+            own = Expansion::new(doc, &r);
+            &own
         }
-        Ok(()) => checks.extend(merger.finish()),
+    };
+    match &exp.error {
+        Some(e) => {
+            let (code, severity) = match e {
+                ResolveError::Reference(_) => (CODE_REFERENCE, Severity::Error),
+                ResolveError::Other(_) => (CODE_TARGET, Severity::Error),
+                ResolveError::TooComplex(_) => (CODE_TOO_COMPLEX, Severity::NotChecked),
+            };
+            checks.push(Check::new(code, severity, e.to_string()));
+        }
+        None => {
+            // Each kind of screen is checked once, and the findings of all
+            // of them merged, each keeping the groups it is in.
+            let mut merger = Merger::default();
+            for (g, rep) in exp.reps.iter().enumerate() {
+                merger.enter(g, run_checks(rep, input, &facts, opt));
+            }
+            checks.extend(merger.finish(exp));
+            // The work ran out while merging what was found.
+            if let Some(why) = crate::budget::explain(Some(doc)) {
+                checks.push(Check::too_complex(why));
+            }
+        }
     }
 
     let result = outcome(&checks);
@@ -199,6 +326,34 @@ pub fn validate(
         result,
         checks,
     })
+}
+
+fn run_checks(req: &Requirements, input: &Input, facts: &Facts, opt: &Options) -> Vec<Check> {
+    // The inherited rule items each get looked at for this kind of screen.
+    let origin = req
+        .network
+        .format(req.format_id)
+        .map_or(req.network as *const _ as usize, |f| f as *const _ as usize);
+    let items = req.rules.required_elements.len()
+        + req.rules.rule_packs.len()
+        + req.rules.restricted_categories.len();
+    if !crate::budget::charge(
+        crate::budget::Work::RuleCheck,
+        origin,
+        (items + 1) as u64 * 8,
+    ) {
+        return Vec::new();
+    }
+    Checker {
+        req,
+        file: input.file,
+        campaign: input.campaign,
+        facts: facts.clone(),
+        margin: opt.warn_margin,
+        rule_packs: opt.rule_packs,
+        out: Vec::new(),
+    }
+    .run()
 }
 
 fn stale_check(doc: &Document, now: &DateTime<FixedOffset>) -> Vec<Check> {
@@ -229,22 +384,30 @@ fn stale_check(doc: &Document, now: &DateTime<FixedOffset>) -> Vec<Check> {
 /// Collapses identical findings from several screens into one, listing the
 /// screens it applies to. A finding that applies to every screen of the
 /// target lists none.
+///
+/// Screens come in groups with the same findings, which are worked out once
+/// and entered in the order of the groups' first screens. Each finding keeps
+/// the groups it is in, and the screens it lists are read off the target's
+/// expansion at the end, so a finding on every screen of a large target
+/// never holds a list of them.
 #[derive(Default)]
 struct Merger {
     index: HashMap<MergeKey, usize>,
     out: Vec<Check>,
-    table: ScreenTable,
-    /// For each finding, the positions (in `table`) of its screens.
-    at: Vec<Vec<u32>>,
-    screens: usize,
+    /// For each finding, the groups it is in.
+    groups_of: Vec<Vec<u32>>,
 }
 
 type MergeKey = (String, String, String, String, Severity, Option<[i64; 4]>);
 
 impl Merger {
-    fn add(&mut self, checks: Vec<Check>, id: &str) {
-        self.screens += 1;
-        let pos = self.table.begin(id);
+    /// Merges a group's checks into the findings.
+    fn enter(&mut self, group: usize, checks: Vec<Check>) {
+        // Each finding of the group is noted against it...
+        crate::budget::charge(crate::budget::Work::Findings, 0, checks.len() as u64 * 8);
+        if crate::budget::tripped() {
+            return;
+        }
         for c in checks {
             let key = (
                 c.code.clone(),
@@ -257,34 +420,85 @@ impl Merger {
             let i = match self.index.get(&key) {
                 Some(&i) => i,
                 None => {
+                    // ...and a new one costs about what it takes to write.
+                    crate::budget::charge(crate::budget::Work::Findings, 0, 256);
                     self.index.insert(key, self.out.len());
                     let mut cc = c;
                     cc.screens = ScreenList::default();
                     self.out.push(cc);
-                    self.at.push(Vec::new());
+                    self.groups_of.push(Vec::new());
                     self.out.len() - 1
                 }
             };
-            // A screen's findings arrive together, so remembering the last
-            // position taken is enough to list it once.
-            if !id.is_empty() && self.at[i].last() != Some(&pos) {
-                self.at[i].push(pos);
+            if self.groups_of[i].last() != Some(&(group as u32)) {
+                self.groups_of[i].push(group as u32);
             }
         }
     }
 
-    fn finish(self) -> Vec<Check> {
-        let mut out = self.out;
-        for (c, (list, total)) in out.iter_mut().zip(self.table.lists(self.at)) {
+    fn finish(self, exp: &Expansion) -> Vec<Check> {
+        let Merger {
+            mut out, groups_of, ..
+        } = self;
+        // Findings in the same groups list the same screens.
+        let mut lists: HashMap<Vec<u32>, (ScreenList, usize)> = HashMap::new();
+        for (c, mut groups) in out.iter_mut().zip(groups_of) {
+            groups.sort_unstable();
+            let (list, total) = lists
+                .entry(groups)
+                .or_insert_with_key(|g| screens_in(g, &exp.members, &exp.ids, exp.repeats))
+                .clone();
             // A finding on every screen of the target lists none.
-            if total == self.screens {
+            if total == exp.screens {
                 continue;
             }
+            c.screens_total = (total > list.len()).then_some(total as u64);
             c.screens = list;
-            c.screens_total = (total > c.screens.len()).then_some(total as u64);
         }
         out
     }
+}
+
+/// The screens in `groups`, in document order, cut to the limit, and how
+/// many there are, counting each id once.
+fn screens_in(
+    groups: &[u32],
+    members: &[Vec<u32>],
+    ids: &Arc<Vec<String>>,
+    repeats: bool,
+) -> (ScreenList, usize) {
+    use std::cmp::Reverse;
+    use std::collections::BinaryHeap;
+    // Merge the groups' positions, which are each in order.
+    let mut heap: BinaryHeap<Reverse<(u32, u32, usize)>> = BinaryHeap::new();
+    for &g in groups {
+        if let Some(&p) = members[g as usize].first() {
+            heap.push(Reverse((p, g, 0)));
+        }
+    }
+    let mut at: Vec<u32> = Vec::new();
+    let mut seen: HashSet<&str> = HashSet::new();
+    let mut total = 0usize;
+    // Without repeated ids, the total is a sum, and only the first positions
+    // are read; with them, every position is.
+    if !repeats {
+        total = groups.iter().map(|&g| members[g as usize].len()).sum();
+    }
+    while let Some(Reverse((p, g, i))) = heap.pop() {
+        let fresh = !repeats || seen.insert(ids[p as usize].as_str());
+        if fresh {
+            total += repeats as usize;
+            if at.len() < MAX_SCREENS_LISTED {
+                at.push(p);
+            } else if !repeats {
+                break;
+            }
+        }
+        if let Some(&next) = members[g as usize].get(i + 1) {
+            heap.push(Reverse((next, g, i + 1)));
+        }
+    }
+    (ScreenList::shared(ids.clone(), at), total)
 }
 
 /// Applies the spec's precedence: any error fails; otherwise any unchecked
@@ -313,13 +527,176 @@ pub fn outcome(checks: &[Check]) -> Outcome {
 mod tests {
     use super::*;
 
+    /// Checking screens with the same requirements once gives the report
+    /// that checking every screen does, over screens that differ in what
+    /// the checks read (viewing, overrides, venue, own rules), in what they
+    /// don't (placement.zone), in ways the fields' JSON wouldn't show (an
+    /// override of `[]`, a dwell of -0), with own rules that conflict (so
+    /// their findings name them), and with repeated and empty ids.
+    #[test]
+    fn grouped_checks_match_checking_every_screen() {
+        use crate::testutil::{lunch_file, offer_campaign};
+        let mut d = harbourline();
+        d.networks[0].rules.as_mut().unwrap().required_elements[0].within_rect_px =
+            Some(Rect([0, 1600, 1080, 320]));
+        let base = d.networks[0].screens[1].clone();
+        for i in 0..120 {
+            let mut s = base.clone();
+            s.id = format!("X{}", i % 80); // some ids repeat
+            s.platform_ids = Default::default();
+            if i % 3 == 0 {
+                s.viewing.as_mut().unwrap().distance_m = Some([1.0 + (i % 7) as f64, 12.0]);
+            }
+            if i % 5 == 0 {
+                s.overrides = None;
+            }
+            if i % 7 == 0 {
+                s.venue = String::new();
+            }
+            if i % 11 == 0 {
+                s.rules = Some(Box::new(RuleSet {
+                    max_words: Some(3),
+                    ..Default::default()
+                }));
+            }
+            if i % 13 == 0 {
+                s.placement.get_or_insert_with(Default::default).zone = format!("zone {i}");
+            }
+            if i % 17 == 0 {
+                s.overrides = Some(Box::new(
+                    serde_json::from_str(r#"{"media":{"static":[]}}"#).unwrap(),
+                ));
+            }
+            if i % 19 == 0 {
+                s.rules = Some(Box::new(RuleSet {
+                    required_elements: vec![RequiredElement {
+                        role: "legal".into(),
+                        when: "offer".into(),
+                        within_rect_px: Some(Rect([0, 0, 1080, 300])),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }));
+            }
+            if i % 23 == 0 {
+                s.viewing.as_mut().unwrap().dwell_s = Some(-0.0);
+            }
+            if i == 40 {
+                s.id = String::new();
+            }
+            d.networks[0].screens.push(s);
+        }
+        let file = lunch_file();
+        let campaign = offer_campaign();
+        let input = Input {
+            file: &file,
+            campaign: Some(&campaign),
+            probe: None,
+        };
+        let opt = Options::new(test_now());
+        let fmt = &d.networks[0].screens[1].format;
+        let target = format!("harbourline.example/retail/{fmt}");
+        let grouped = validate(&d, &input, &target, &opt).unwrap();
+        // The same, a group for every screen.
+        let r = parse_ref(&target).unwrap();
+        let (facts, _) = gather_facts(input.file, input.probe);
+        let exp = Expansion::ungrouped(&d, &r);
+        let mut m = Merger::default();
+        for (g, rep) in exp.reps.iter().enumerate() {
+            m.enter(g, run_checks(rep, &input, &facts, &opt));
+        }
+        let each = m.finish(&exp);
+        assert!(!each.is_empty());
+        let got: Vec<_> = grouped
+            .checks
+            .iter()
+            .filter(|c| !c.screens.is_empty() || c.code != "CRS-FILE-SIZE")
+            .collect();
+        let want = |c: &Check| each.iter().any(|e| e == c);
+        assert!(got.iter().all(|c| want(c)), "{got:?}\nvs\n{each:?}");
+        for e in &each {
+            assert!(grouped.checks.contains(e), "missing {e:?}");
+        }
+    }
+
+    /// An override that clears a list (`"static": []`) and one that leaves
+    /// it alone (`{}`) resolve differently, so their screens are not one
+    /// group, though both serialise to `{}`.
+    #[test]
+    fn overrides_that_clear_a_list_are_not_grouped_with_those_that_do_not() {
+        use crate::testutil::{check_doc, find, lunch_file, offer_campaign};
+        let mut d = harbourline();
+        let n = &mut d.networks[0];
+        let mut a = n.screens[0].clone();
+        a.id = "A".into();
+        a.overrides = Some(Box::new(
+            serde_json::from_str(r#"{"media":{"static":[]},"segments":[]}"#).unwrap(),
+        ));
+        let mut b = a.clone();
+        b.id = "B".into();
+        b.overrides = Some(Box::new(serde_json::from_str(r#"{"media":{}}"#).unwrap()));
+        let target = format!("harbourline.example/retail/{}", a.format);
+        n.screens = vec![a, b];
+        let rep = check_doc(&d, &lunch_file(), Some(&offer_campaign()), &target);
+        let got = find(&rep, CODE_MEDIA_TYPE, Severity::Error);
+        assert_eq!(got.len(), 1, "{:?}", rep.checks);
+        assert_eq!(got[0].screens, ["A"], "only A clears the static types");
+    }
+
+    /// A conflict a screen's own rules cause names the screen, so screens
+    /// that are otherwise alike get their own findings, as checking each
+    /// screen gives.
+    #[test]
+    fn screens_with_their_own_conflicting_rules_are_reported_apart() {
+        use crate::testutil::{check_doc, find, lunch_file, offer_campaign};
+        let mut d = harbourline();
+        d.networks[0].rules.as_mut().unwrap().required_elements[0].within_rect_px =
+            Some(Rect([0, 1600, 1080, 320]));
+        let own = RuleSet {
+            required_elements: vec![RequiredElement {
+                role: "legal".into(),
+                when: "offer".into(),
+                within_rect_px: Some(Rect([0, 0, 1080, 300])),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let n = &mut d.networks[0];
+        let mut a = n.screens[0].clone();
+        a.id = "A".into();
+        a.rules = Some(Box::new(own));
+        let mut b = a.clone();
+        b.id = "B".into();
+        let target = format!("harbourline.example/retail/{}", a.format);
+        n.screens = vec![a, b];
+        let rep = check_doc(&d, &lunch_file(), Some(&offer_campaign()), &target);
+        let got = find(&rep, CODE_RULE_CONFLICT, Severity::Error);
+        assert_eq!(got.len(), 2, "{:?}", rep.checks);
+        for id in ["A", "B"] {
+            assert!(
+                got.iter()
+                    .any(|c| c.message.starts_with(&format!("screen {id} restates"))
+                        && c.screens == [id]),
+                "{id}: {got:?}"
+            );
+        }
+    }
+
     #[test]
     fn merging_lists_each_screen_once_and_drops_a_full_list() {
         let finding = |m: &str| vec![Check::new("CRS-X", Severity::Error, m)];
+        let exp = Expansion {
+            reps: Vec::new(),
+            members: vec![vec![0], vec![1]],
+            ids: Arc::new(vec!["a".into(), "b".into()]),
+            repeats: false,
+            screens: 2,
+            error: None,
+        };
         let mut m = Merger::default();
-        m.add([finding("all"), finding("some")].concat(), "a");
-        m.add([finding("all"), finding("all")].concat(), "b");
-        let out = m.finish();
+        m.enter(0, [finding("all"), finding("some")].concat());
+        m.enter(1, [finding("all"), finding("all")].concat());
+        let out = m.finish(&exp);
         assert_eq!(out.len(), 2);
         // "all" is on both screens, so it lists none; "some" lists its one.
         assert!(out[0].screens.is_empty(), "{:?}", out[0].screens);

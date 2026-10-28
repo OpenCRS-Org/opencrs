@@ -353,7 +353,7 @@ impl<'a> Checker<'a> {
         }
         for e in els {
             let rect = e.rect_px.expect("placed elements have a rect");
-            for br in &req.blocked_regions {
+            for br in req.blocked_regions.iter() {
                 if overlaps(rect, br.rect_px) {
                     let mut c = Check::new(
                         CODE_BLOCKED_REGION,
@@ -487,7 +487,7 @@ impl<'a> Checker<'a> {
     fn required_elements(&mut self) {
         let req: &'a Requirements<'a> = self.req;
         let file: &'a CreativeFile = self.file;
-        for want in &req.rules.required_elements {
+        for want in req.rules.required_elements.iter() {
             let mut what = title(&want.role);
             if !want.when.is_empty() {
                 what += &format!(" (on {} creative)", want.when);
@@ -610,7 +610,7 @@ impl<'a> Checker<'a> {
             );
             return;
         }
-        for r in restricted {
+        for r in restricted.iter() {
             if category_within(cat, r) {
                 self.report(
                     CODE_CATEGORY,
@@ -683,7 +683,7 @@ impl<'a> Checker<'a> {
     /// can't comply says why.
     fn rule_conflicts(&mut self) {
         let req: &'a Requirements<'a> = self.req;
-        for msg in &req.rules.conflicts {
+        for msg in req.rules.conflicts.iter() {
             self.report(CODE_RULE_CONFLICT, Severity::Error, msg.clone());
         }
     }

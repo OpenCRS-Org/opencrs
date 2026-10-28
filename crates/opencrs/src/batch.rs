@@ -7,13 +7,14 @@ use crate::error::Error;
 use crate::legibility::TextClass;
 use crate::model::{CreativeFile, Document, Insets, Manifest, Media, Region, Segment, Viewing};
 use crate::probe::Probe;
-use crate::report::{Input, Options, Report, ValidateError, validate};
-use crate::resolve::parse_ref;
-use crate::resolve::{Requirements, Rules};
-use crate::schema::{Kind, SchemaError, SchemaOptions, detect_kind, validate_schema};
+use crate::report::{Expansion, Input, Options, Report, ValidateError, validate_with};
+use crate::resolve::{Ref, Requirements, ResolveError, Rules, parse_ref};
+use crate::schema::{Kind, SchemaError, SchemaOptions};
+use serde::ser::SerializeSeq;
 use serde::{Serialize, Serializer};
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, HashMap};
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// Checks every file in a manifest against every target that one of `docs`
 /// describes. `probes` holds what could be read from each file, keyed by its
@@ -86,21 +87,46 @@ pub fn check_manifest_each(
     opt: &Options,
     mut sink: impl FnMut(Report),
 ) -> Result<(), Error> {
+    // The documents and the manifest set how much work all the checks
+    // together may do. Counted the same however many threads run them.
+    let budget = match crate::budget::current() {
+        Some(b) => b,
+        None => {
+            crate::budget::Budget::for_input(docs.iter().map(|d| d.size).sum::<usize>() + m.size)
+        }
+    };
+    let _outer = budget.install();
     // One unit of work per (file, target) pair.
     let pairs: Vec<(&CreativeFile, &String)> = m
         .files
         .iter()
         .flat_map(|f| f.targets.iter().map(move |t| (f, t)))
         .collect();
+    // Each target is expanded (resolved and grouped) once for each document
+    // that describes it, and every file aimed at it is checked against that
+    // expansion, group by group.
+    let mut expansions: HashMap<(usize, &str), Expansion> = HashMap::new();
+    for &(_, target) in &pairs {
+        let Ok(r) = parse_ref(target) else { continue };
+        for (i, d) in docs.iter().enumerate() {
+            if r.publisher == d.publisher {
+                expansions
+                    .entry((i, target.as_str()))
+                    .or_insert_with(|| Expansion::new(d, &r));
+            }
+        }
+    }
     let one = |&(f, target): &(&CreativeFile, &String)| -> Result<Vec<Report>, Error> {
+        let _g = budget.install();
         let input = Input {
             file: f,
             campaign: m.campaign.as_ref(),
             probe: probes.get(&f.file),
         };
         let mut reports = Vec::new();
-        for d in docs {
-            match validate(d, &input, target, opt) {
+        for (i, d) in docs.iter().enumerate() {
+            let exp = expansions.get(&(i, target.as_str()));
+            match validate_with(d, &input, target, opt, exp) {
                 Ok(rep) => reports.push(rep),
                 Err(ValidateError::OtherPublisher(_)) => {}
                 Err(e) => return Err(Error::msg(format!("{}: {e}", f.file))),
@@ -156,11 +182,11 @@ impl LintResult {
 /// given) and, for a valid screens.json, runs `check_document`. An error
 /// means the document couldn't be read at all.
 pub fn lint(raw: &[u8], kind: Option<Kind>, opt: &SchemaOptions) -> Result<LintResult, Error> {
-    let kind = match kind {
-        Some(k) => k,
-        None => detect_kind(raw)?,
-    };
-    let errs = validate_schema(kind, raw, opt)?;
+    crate::budget::ensure(raw.len(), || lint_within(raw, kind, opt))
+}
+
+fn lint_within(raw: &[u8], kind: Option<Kind>, opt: &SchemaOptions) -> Result<LintResult, Error> {
+    let (kind, errs) = crate::schema::validate_detecting(kind, raw, opt)?;
     let mut res = LintResult {
         kind,
         schema_errors: errs,
@@ -173,8 +199,134 @@ pub fn lint(raw: &[u8], kind: Option<Kind>, opt: &SchemaOptions) -> Result<LintR
         if let Some(checks) = std::str::from_utf8(raw).ok().and_then(check_document_text) {
             res.document_checks = checks;
         }
+        // The checks stopped short: say so beside what they found.
+        if let Some(why) = crate::budget::explain(None) {
+            res.document_checks.push(Check::too_complex(why));
+        }
     }
     Ok(res)
+}
+
+/// The screens a reference covers, with those whose requirements are the
+/// same apart from their id sharing one entry: `{"screens": [ids], ...the
+/// view}`. A format of tens of thousands of screens usually comes to a few
+/// dozen entries. Entries are in order of the first screen that has them and
+/// list their screens in document order; a format with no screens gives one
+/// entry with no `screens`. Nothing else is lost: every screen's view is its
+/// entry's, with `screen` set to its id.
+///
+/// Built in one pass that keeps only fingerprints and ids, and written in a
+/// second that works out just the entries' views, so memory stays small even
+/// when no two screens are alike.
+pub struct GroupedViews<'a> {
+    doc: &'a Document,
+    target: Ref,
+    /// For each entry, the position of its first screen among the results.
+    firsts: Vec<usize>,
+    screens: Vec<Vec<&'a str>>,
+}
+
+impl<'a> GroupedViews<'a> {
+    /// Groups the screens `target` covers in `doc`, or says why it doesn't
+    /// resolve.
+    pub fn new(doc: &'a Document, target: Ref) -> Result<Self, ResolveError> {
+        let mut seen: HashMap<[u8; 32], usize> = HashMap::new();
+        let mut firsts = Vec::new();
+        let mut screens: Vec<Vec<&'a str>> = Vec::new();
+        let mut at = 0usize;
+        let mut listed: HashSet<&'a str> = HashSet::new();
+        let mut by_key: HashMap<Vec<u8>, usize> = HashMap::new();
+        let mut key = Vec::new();
+        doc.resolve_each(&target, |q| {
+            // Once the budget is spent, resolve_each says so when it is done.
+            if crate::budget::tripped() {
+                return;
+            }
+            let screen = q.screen.map(|s| s.id.as_str());
+            // A screen is listed once, by id, as a lookup by id finds one;
+            // a screen with an empty id is listed (as "") like any other.
+            if let Some(id) = screen
+                && !listed.insert(id)
+            {
+                at += 1;
+                return;
+            }
+            // Screens with the same requirements have the same view, which
+            // is worked out once, not for each of them.
+            key.clear();
+            let keyed = q.key(&mut key);
+            let g = match by_key.get(key.as_slice()) {
+                Some(&g) if keyed => g,
+                _ => {
+                    let mut v = q.view();
+                    v.screen.clear();
+                    let print: [u8; 32] =
+                        Sha256::digest(serde_json::to_vec(&v).expect("a view is serialisable"))
+                            .into();
+                    let g = *seen.entry(print).or_insert_with(|| {
+                        firsts.push(at);
+                        screens.push(Vec::new());
+                        firsts.len() - 1
+                    });
+                    if keyed {
+                        by_key.insert(key.clone(), g);
+                    }
+                    g
+                }
+            };
+            if let Some(id) = screen {
+                screens[g].push(id);
+            }
+            at += 1;
+        })?;
+        Ok(GroupedViews {
+            doc,
+            target,
+            firsts,
+            screens,
+        })
+    }
+}
+
+#[derive(Serialize)]
+struct Group<'a> {
+    #[serde(skip_serializing_if = "<[&str]>::is_empty")]
+    screens: &'a [&'a str],
+    #[serde(flatten)]
+    view: RequirementsView,
+}
+
+impl Serialize for GroupedViews<'_> {
+    fn serialize<S: Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
+        let mut seq = ser.serialize_seq(Some(self.firsts.len()))?;
+        let (mut at, mut next) = (0usize, 0usize);
+        let mut err = None;
+        // The first pass settled the work; this one repeats it, so it is not
+        // counted again (and can't run the budget out part way through).
+        let resolved = crate::budget::unmetered(|| {
+            self.doc.resolve_each(&self.target, |q| {
+                if err.is_none() && self.firsts.get(next) == Some(&at) {
+                    let mut view = q.view();
+                    view.screen.clear();
+                    let g = Group {
+                        screens: &self.screens[next],
+                        view,
+                    };
+                    if let Err(e) = seq.serialize_element(&g) {
+                        err = Some(e);
+                    }
+                    next += 1;
+                }
+                at += 1;
+            })
+        });
+        use serde::ser::Error as _;
+        match (err, resolved) {
+            (Some(e), _) => Err(e),
+            (None, Err(e)) => Err(S::Error::custom(e)),
+            (None, Ok(())) => seq.end(),
+        }
+    }
 }
 
 /// A JSON-friendly summary of one screen's resolved requirements, with
@@ -207,6 +359,16 @@ pub struct RequirementsView {
 impl Requirements<'_> {
     /// Summarises the requirements for display.
     pub fn view(&self) -> RequirementsView {
+        crate::budget::charge(
+            crate::budget::Work::Views,
+            self.network as *const _ as usize,
+            (self.rules.required_elements.len()
+                + self.rules.rule_packs.len()
+                + self.rules.restricted_categories.len()
+                + self.blocked_regions.len()
+                + 8) as u64
+                * 24,
+        );
         let mut derived = BTreeMap::new();
         for (name, class) in [
             ("min_key_cap_height", TextClass::Key),
@@ -234,10 +396,10 @@ impl Requirements<'_> {
             venue: self.venue.map_or_else(String::new, |v| v.id.clone()),
             pixels: self.pixels,
             physical_mm: self.physical_mm,
-            media: self.media.clone(),
+            media: self.media.clone().into_owned(),
             safe_area: self.safe_area,
-            blocked_regions: self.blocked_regions.clone(),
-            segments: self.segments.clone(),
+            blocked_regions: self.blocked_regions.to_vec(),
+            segments: self.segments.to_vec(),
             viewing: self.screen.and_then(|s| s.viewing.clone()),
             rules: self.rules.clone(),
             derived,
@@ -249,7 +411,147 @@ impl Requirements<'_> {
 mod tests {
     use super::*;
     use crate::check::CODE_REFERENCE;
+    use crate::json;
     use crate::testutil::{harbourline, test_now};
+
+    fn n_id(d: &Document) -> String {
+        d.networks[0].screens[0].id.clone()
+    }
+
+    /// Grouped views expand to exactly the per-screen views, and screens
+    /// that differ only by id share an entry.
+    #[test]
+    fn grouped_views_expand_to_the_per_screen_views() {
+        let mut d = harbourline();
+        let n = &mut d.networks[0];
+        let template = n.screens[1].clone();
+        for i in 0..40 {
+            let mut s = template.clone();
+            s.id = format!("X-{i:02}");
+            if i % 10 == 0 {
+                s.venue = String::new();
+            }
+            n.screens.push(s);
+        }
+        let n = n.clone();
+        d.networks[0] = n;
+        let rf = parse_ref(&format!(
+            "harbourline.example/retail/{}",
+            d.networks[0].screens[1].format
+        ))
+        .unwrap();
+        let g = GroupedViews::new(&d, rf.clone()).unwrap();
+        let grouped: Vec<Value> = serde_json::from_str(&json::to_string(&g)).unwrap();
+        let reqs = d.resolve(&rf).unwrap();
+        assert!(grouped.len() < reqs.len(), "{} entries", grouped.len());
+        let mut expanded: Vec<(String, Value)> = Vec::new();
+        for mut e in grouped {
+            let ids: Vec<String> = e
+                .as_object_mut()
+                .unwrap()
+                .remove("screens")
+                .map_or_else(Vec::new, |v| serde_json::from_value(v).unwrap());
+            for id in ids {
+                expanded.push((id.clone(), e.clone()));
+            }
+        }
+        assert_eq!(expanded.len(), reqs.len());
+        for (id, entry) in expanded {
+            let q = reqs.iter().find(|q| q.screen_id() == id).unwrap();
+            let mut want: Value = serde_json::from_str(&json::to_string(&q.view())).unwrap();
+            want.as_object_mut().unwrap().remove("screen");
+            assert_eq!(entry, want, "{id}");
+        }
+        // A repeated id is listed once, and an empty id is listed.
+        let mut odd = harbourline();
+        let n = &mut odd.networks[0];
+        let (a, b) = (n.screens[0].clone(), n.screens[1].clone());
+        n.screens = vec![a.clone(), a, b];
+        n.screens[2].id = String::new();
+        let rf = parse_ref(&format!(
+            "harbourline.example/retail/{}",
+            n.screens[0].format
+        ))
+        .unwrap();
+        let g = GroupedViews::new(&odd, rf).unwrap();
+        let v: Vec<Value> = serde_json::from_str(&json::to_string(&g)).unwrap();
+        let ids: Vec<_> = v
+            .iter()
+            .flat_map(|e| {
+                e["screens"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|s| s.as_str().unwrap().to_string())
+            })
+            .collect();
+        assert_eq!(ids, [n_id(&odd), String::new()]);
+        // A format no screen uses is one entry with no screens.
+        let mut empty = harbourline();
+        empty.networks[0].screens.clear();
+        let rf = parse_ref("harbourline.example/retail/portrait-totem-75").unwrap();
+        let g = GroupedViews::new(&empty, rf).unwrap();
+        let v: Vec<Value> = serde_json::from_str(&json::to_string(&g)).unwrap();
+        assert_eq!(v.len(), 1);
+        assert!(v[0].get("screens").is_none());
+        assert!(
+            GroupedViews::new(&d, parse_ref("harbourline.example/retail/nope").unwrap()).is_err()
+        );
+    }
+
+    /// Screens whose views differ get their own entries, though their
+    /// screen fields look alike once serialised (an override of `[]` against
+    /// none) or their own rules are the same (a conflict names the screen).
+    #[test]
+    fn grouped_views_keep_apart_screens_whose_views_differ() {
+        let entries = |d: &Document| -> Vec<Value> {
+            let n = &d.networks[0];
+            let rf = parse_ref(&format!(
+                "harbourline.example/retail/{}",
+                n.screens[0].format
+            ))
+            .unwrap();
+            let g = GroupedViews::new(d, rf).unwrap();
+            serde_json::from_str(&json::to_string(&g)).unwrap()
+        };
+        let mut d = harbourline();
+        let n = &mut d.networks[0];
+        let mut a = n.screens[0].clone();
+        a.id = "A".into();
+        a.overrides = Some(Box::new(
+            serde_json::from_str(r#"{"media":{"static":[]}}"#).unwrap(),
+        ));
+        let mut b = a.clone();
+        b.id = "B".into();
+        b.overrides = Some(Box::new(serde_json::from_str(r#"{"media":{}}"#).unwrap()));
+        n.screens = vec![a, b];
+        let v = entries(&d);
+        assert_eq!(v.len(), 2, "{v:?}");
+        assert!(v[0]["media"].get("static").is_none(), "{v:?}");
+        assert_eq!(v[1]["media"]["static"], json!(["image/jpeg", "image/png"]));
+
+        let mut d = harbourline();
+        d.networks[0].rules.as_mut().unwrap().required_elements[0].within_rect_px =
+            Some(crate::model::Rect([0, 1600, 1080, 320]));
+        let n = &mut d.networks[0];
+        let mut a = n.screens[0].clone();
+        a.id = "A".into();
+        a.rules = Some(Box::new(
+            serde_json::from_value(json!({"required_elements": [
+                {"role": "legal", "when": "offer", "within_rect_px": [0, 0, 1080, 300]}]}))
+            .unwrap(),
+        ));
+        let mut b = a.clone();
+        b.id = "B".into();
+        n.screens = vec![a, b];
+        let v = entries(&d);
+        assert_eq!(v.len(), 2, "{v:?}");
+        for (e, id) in v.iter().zip(["A", "B"]) {
+            assert_eq!(e["screens"], json!([id]));
+            let c = e["rules"]["conflicts"][0].as_str().unwrap();
+            assert!(c.starts_with(&format!("screen {id} restates")), "{c}");
+        }
+    }
 
     fn example(rel: &str) -> Vec<u8> {
         let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

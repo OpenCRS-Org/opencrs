@@ -159,7 +159,7 @@ impl<'a> Checker<'a> {
         let known: &'a RulePacks = self.rule_packs;
         let req: &'a Requirements<'a> = self.req;
         let mut out = Vec::new();
-        for reference in &req.rules.rule_packs {
+        for reference in req.rules.rule_packs.iter() {
             let Some(p) = known.get(reference) else {
                 let mut msg = format!(
                     "Rule pack {reference} isn't known to this validator, so its rules weren't checked"
@@ -1310,7 +1310,7 @@ mod tests {
             .resolve(&parse_ref(&screen_target("HR-UNK-004")).unwrap())
             .unwrap();
         assert_eq!(
-            reqs[0].rules.rule_packs,
+            reqs[0].rules.rule_packs.as_slice(),
             [
                 "au-nsw-transport-corridor@2017-11",
                 "au-nt-roadside@2020-01",

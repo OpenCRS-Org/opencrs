@@ -55,14 +55,38 @@ func load() (wazero.Runtime, wazero.CompiledModule, error) {
 	return runtime_, compiled, loadErr
 }
 
-// instance is one fresh module instance. It is not safe for concurrent use;
-// each public call makes its own.
+// instance is one module instance. It is not safe for concurrent use; each
+// public call takes its own, from idle ones kept for reuse when there are any.
 type instance struct {
 	ctx context.Context
 	mod api.Module
+	// dirty is set when a call failed, which can leave the module holding
+	// memory or a probe session; such an instance is closed, not reused.
+	dirty bool
 }
 
+// Setting up a fresh instance costs most of a small call (the module builds
+// its schema validators on first use), so a few idle instances are kept. An
+// instance that grew past idleMemory pages, or failed, is closed instead.
+const (
+	maxIdle    = 2
+	idleMemory = 256 // 16 MiB
+)
+
+var (
+	idleMu sync.Mutex
+	idle   []*instance
+)
+
 func newInstance() (*instance, error) {
+	idleMu.Lock()
+	if n := len(idle); n > 0 {
+		in := idle[n-1]
+		idle = idle[:n-1]
+		idleMu.Unlock()
+		return in, nil
+	}
+	idleMu.Unlock()
 	rt, cm, err := load()
 	if err != nil {
 		return nil, fmt.Errorf("opencrs: loading the module: %w", err)
@@ -72,10 +96,40 @@ func newInstance() (*instance, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opencrs: instantiating the module: %w", err)
 	}
-	return &instance{ctx: ctx, mod: mod}, nil
+	in := &instance{ctx: ctx, mod: mod}
+	// The module builds its schema validators the first time it needs
+	// them. Doing that now, before any request is copied in, keeps them
+	// below the request buffers, so a request freed later leaves a hole
+	// the next one fits, not a heap that has to grow past live validators.
+	for _, doc := range warmDocs {
+		if _, err := in.callRaw("opencrs_lint", []byte(doc)); err != nil {
+			_ = mod.Close(ctx)
+			return nil, fmt.Errorf("opencrs: preparing the module: %w", err)
+		}
+	}
+	return in, nil
 }
 
-func (in *instance) close() { _ = in.mod.Close(in.ctx) }
+// warmDocs are the smallest documents of the kinds Check and Resolve read.
+var warmDocs = []string{
+	`{"opencrs":"0.1","publisher":"a.example","updated_at":"2026-01-01T00:00:00Z","networks":[{"id":"n","name":"N","formats":[{"id":"f","pixels":[1,1],"media":{"static":["image/png"]}}],"screens":[{"id":"s","format":"f"}]}]}`,
+	`{"opencrs":"0.1","files":[{"file":"a.png","media_type":"image/png","targets":["a.example/n/f"]}]}`,
+}
+
+// close ends a call: the instance goes back to be reused if it is in a clean
+// state and small, and is closed otherwise.
+func (in *instance) close() {
+	if !in.dirty && in.mod.Memory().Size() <= idleMemory*65536 {
+		idleMu.Lock()
+		if len(idle) < maxIdle {
+			idle = append(idle, in)
+			idleMu.Unlock()
+			return
+		}
+		idleMu.Unlock()
+	}
+	_ = in.mod.Close(in.ctx)
+}
 
 func (in *instance) fn(name string) (api.Function, error) {
 	f := in.mod.ExportedFunction(name)
@@ -244,10 +298,14 @@ func runWith(out any, call func(*instance) ([]byte, error)) error {
 		return err
 	}
 	defer in.close()
+	// Dirty until the call returns, so a panic out of it (a caller's reader,
+	// say) doesn't send the instance back to be reused.
+	in.dirty = true
 	resp, err := call(in)
 	if err != nil {
 		return err
 	}
+	in.dirty = false
 	return decode(resp, out)
 }
 
@@ -293,7 +351,14 @@ func Probe(r io.ReaderAt, size int64) (*ProbeResult, error) {
 		return nil, err
 	}
 	defer in.close()
-	return probeOn(in, r, size, hex.EncodeToString(h.Sum(nil)))
+	// Dirty until the probe finishes: a failure, or a panic out of r's
+	// ReadAt, can leave a session open in the module.
+	in.dirty = true
+	res, err := probeOn(in, r, size, hex.EncodeToString(h.Sum(nil)))
+	if err == nil {
+		in.dirty = false
+	}
+	return res, err
 }
 
 type probeStep struct {
@@ -562,12 +627,32 @@ func (b bytesReaderAt) ReadAt(p []byte, off int64) (int, error) {
 // "harbourline.example/retail/portrait-totem-75". A format gives one result
 // per screen using it.
 func Resolve(spec []byte, ref string) ([]Requirements, error) {
-	var res []Requirements
+	// The module answers with the distinct views and, for each screen, which
+	// view it has: a format of 190,000 screens in 500 kinds is a few
+	// megabytes that way rather than 70, and is put together here.
+	var res struct {
+		Views []Requirements `json:"views"`
+		Group []int          `json:"group"`
+		ID    []*string      `json:"id"`
+	}
 	err := runWith(&res, func(in *instance) ([]byte, error) {
-		return in.callDocs("opencrs_resolve", map[string]any{"ref": ref}, spec)
+		return in.callDocs("opencrs_resolve", map[string]any{"ref": ref, "grouped": true}, spec)
 	})
 	if err != nil {
 		return nil, err
 	}
-	return res, nil
+	if len(res.Group) != len(res.ID) {
+		return nil, errors.New("opencrs: resolve: malformed answer")
+	}
+	out := make([]Requirements, len(res.Group))
+	for i, g := range res.Group {
+		if g < 0 || g >= len(res.Views) {
+			return nil, errors.New("opencrs: resolve: malformed answer")
+		}
+		out[i] = res.Views[g]
+		if res.ID[i] != nil {
+			out[i].Screen = *res.ID[i]
+		}
+	}
+	return out, nil
 }

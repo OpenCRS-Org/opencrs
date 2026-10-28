@@ -40,6 +40,12 @@ func (e SchemaError) String() string {
 	return p + ": " + e.Message
 }
 
+// CodeTooComplex is the code of the finding that says the validator stopped
+// because the document asked for more work than it allows for its size. The
+// document may be valid: it is too complex for this validator. The message
+// says where the work came from.
+const CodeTooComplex = "CRS-TOO-COMPLEX"
+
 // Finding is one check result in a report (the brief calls it Check, which
 // would clash with the Check function).
 type Finding struct {
@@ -104,12 +110,37 @@ type ProbeResult struct {
 type CheckResult struct {
 	Reports []*Report `json:"reports"`
 	Notes   []string  `json:"notes,omitempty"`
-	// Requirements maps each report's target to the screens it covers.
-	Requirements map[string][]Requirements `json:"requirements"`
+	// Requirements maps each report's target to the screens it covers,
+	// grouped: screens whose requirements differ only by id share an entry.
+	Requirements map[string][]RequirementsGroup `json:"requirements"`
 	// Missing, set by CheckDir, lists the manifest's files that weren't
 	// found, in manifest order. They were judged on the manifest's own
 	// declared values (pixels, size, duration) rather than the files.
 	Missing []string `json:"missing,omitempty"`
+}
+
+// RequirementsGroup is the resolved requirements of every screen in Screens,
+// which are the same for all of them. Entries are in the order of their first
+// screen, and Screens is in document order. A format no screen uses gives one
+// entry with no Screens. Requirements.Screen is empty here: the ids are in
+// Screens.
+type RequirementsGroup struct {
+	Screens []string `json:"screens,omitempty"`
+	Requirements
+}
+
+// Expand returns one Requirements for each screen of the group, with Screen
+// set, or the group's own Requirements if it names no screens.
+func (g RequirementsGroup) Expand() []Requirements {
+	if len(g.Screens) == 0 {
+		return []Requirements{g.Requirements}
+	}
+	out := make([]Requirements, len(g.Screens))
+	for i, id := range g.Screens {
+		out[i] = g.Requirements
+		out[i].Screen = id
+	}
+	return out
 }
 
 // Requirements is one screen's resolved requirements, with derived minimum

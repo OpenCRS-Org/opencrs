@@ -94,7 +94,11 @@ for (const [name, data] of Object.entries(files)) {
   const started = Date.now();
   const checkBig = JSON.parse(await checker.check([big], manifest, {}, "2026-10-28T00:00:00Z"));
   assert.ok(!checkBig.error, checkBig.error);
-  assert.equal(checkBig.requirements["big.example/net/fmt-0"].length, 190000);
+  // Screens that differ only by id share an entry; these differ by venue.
+  const groups = checkBig.requirements["big.example/net/fmt-0"];
+  assert.equal(groups.length, 500);
+  assert.equal(groups.reduce((n, g) => n + g.screens.length, 0), 190000);
+  assert.ok(JSON.stringify(checkBig.requirements).length < 8 * 1024 * 1024, "the answer should be compact");
   assert.ok(Date.now() - started < 60_000, `check took ${Date.now() - started} ms`);
   assert.ok(checker.memoryBytes() <= 256 * 1024 * 1024, `check used ${checker.memoryBytes()} bytes`);
 }
@@ -104,6 +108,28 @@ for (const [name, data] of Object.entries(files)) {
   const huge = new Uint8Array(256 * 1024 * 1024);
   assert.throws(() => api.lint(huge), /memory limit/);
   assert.match(JSON.parse(await api.check([huge], "{}", {}, "2026-10-28T00:00:00Z")).error, /memory limit/);
+}
+
+// A document built to make the checks do far more work than its size
+// warrants stops with CRS-TOO-COMPLEX and says where the work came from.
+{
+  const elements = Array.from({ length: 2000 }, (_, i) => ({ role: `r${i}`, min_cap_height_mm: 1 }));
+  const screens = Array.from({ length: 6000 }, (_, i) => ({
+    id: `s${i}`, format: "f", viewing: { distance_m: [1, 2 + (i % 900)], dwell_s: 1 + (i % 40) }, placement: { zone: `z${i}` },
+  }));
+  const doc = JSON.stringify({
+    opencrs: "0.1", publisher: "x.example", updated_at: "2026-10-20T09:00:00+11:00",
+    networks: [{ id: "n", name: "N", rules: { required_elements: elements },
+      formats: [{ id: "f", pixels: [1080, 1920], media: { static: ["image/png"] } }], screens }],
+  });
+  const man = JSON.stringify({ opencrs: "0.1", files: [{ file: "a.png", media_type: "image/png", pixels: [1080, 1920], targets: ["x.example/n/f"] }] });
+  const r = JSON.parse(await api.check([doc], man, {}, "2026-10-28T00:00:00Z"));
+  const finding = r.reports[0].checks.find((c) => c.code === "CRS-TOO-COMPLEX");
+  assert.ok(finding, "the guard should trip");
+  assert.equal(finding.severity, "not_checked");
+  assert.equal(r.reports[0].result, "incomplete");
+  assert.match(finding.message, /2,000 required elements/);
+  assert.match(finding.message, /\/networks\/0\/rules\/required_elements/);
 }
 
 // After a trap the loader discards the instance and the next call works.
@@ -132,7 +158,9 @@ if (CHECK_PENDING) {
   const got = check.reports.map((r) => ({ ...r }));
   for (const r of [...got, ...expected]) delete r.validator;
   assert.deepEqual(got, expected, "browser and CLI reports differ");
-  assert.equal(check.requirements["harbourline.example/retail/portrait-totem-75"].length, 2);
+  const totem = check.requirements["harbourline.example/retail/portrait-totem-75"];
+  assert.deepEqual(totem.map((g) => g.screens), [["HC-L1-001"], ["HC-L1-002"]]);
+  assert.equal(totem[0].screen, undefined, "a group names its screens in `screens`");
   assert.ok(Array.isArray(resolved) && resolved.length === 2);
 }
 
