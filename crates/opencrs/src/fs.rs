@@ -391,7 +391,6 @@ mod tests {
                     ..CreativeFile::default()
                 })
                 .collect(),
-            source: "".into(),
         }
     }
 

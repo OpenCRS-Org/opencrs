@@ -1,9 +1,22 @@
 //! OpenCRS core as a plain-ABI WebAssembly module: no wasm-bindgen, no
 //! imports. Memory is the only way in or out.
 //!
-//! Every operation takes a UTF-8 JSON request at `(ptr, len)` and returns
+//! Every operation takes a request at `(ptr, len)` and returns
 //! `(ptr << 32) | len` of a UTF-8 JSON response that the caller frees with
 //! `opencrs_free`. A response is the result object or `{"error": "..."}`.
+//!
+//! Most requests are UTF-8 JSON. The calls that carry documents, which may
+//! be tens of megabytes, take them as raw bytes instead, so the module never
+//! holds an escaped copy beside the decoded one:
+//!
+//! - `opencrs_lint`: the request is the document itself.
+//! - `opencrs_check` and `opencrs_resolve`: the request is a frame, a
+//!   little-endian u32 `n`, then `n` bytes of JSON header, then the
+//!   documents back to back. The header's `blobs` lists their lengths.
+//!   `check` takes the manifest, then each spec; `resolve` takes the spec.
+//!
+//! `check` and `resolve` take ownership of the request: the module frees it
+//! as soon as the documents are decoded, and the caller must not free it.
 //! The operations themselves are ordinary functions over byte slices (the
 //! `ops` module), so they are tested natively; `abi` is the thin layer of
 //! exports.
@@ -39,25 +52,53 @@ mod ops {
         serde_json::from_slice(req).map_err(|e| error(format!("usage: {usage}: {e}")))
     }
 
+    /// A request that carries documents: the JSON header, and the raw
+    /// documents in the order the header's `blobs` gives their lengths.
+    struct Frame<'a, T> {
+        header: T,
+        blobs: Vec<&'a [u8]>,
+    }
+
+    #[derive(Deserialize)]
+    struct Lengths {
+        #[serde(default)]
+        blobs: Vec<usize>,
+    }
+
+    fn frame<'a, T: Deserialize<'a>>(req: &'a [u8], usage: &str) -> Result<Frame<'a, T>, Vec<u8>> {
+        let bad = || error(format!("usage: {usage}: malformed request frame"));
+        let (n, rest) = req.split_first_chunk::<4>().ok_or_else(bad)?;
+        let n = u32::from_le_bytes(*n) as usize;
+        if n > rest.len() {
+            return Err(bad());
+        }
+        let (head, mut rest) = rest.split_at(n);
+        let lens: Lengths = parse(head, usage)?;
+        let mut blobs = Vec::with_capacity(lens.blobs.len());
+        for len in lens.blobs {
+            if len > rest.len() {
+                return Err(bad());
+            }
+            let (blob, tail) = rest.split_at(len);
+            blobs.push(blob);
+            rest = tail;
+        }
+        Ok(Frame {
+            header: parse(head, usage)?,
+            blobs,
+        })
+    }
+
     pub fn version(_req: &[u8]) -> Vec<u8> {
         reply(&json!({ "version": SPEC_VERSION }))
     }
 
-    #[derive(Deserialize)]
-    struct LintReq {
-        text: String,
-    }
-
-    pub fn lint(req: &[u8]) -> Vec<u8> {
-        let r: LintReq = match parse(req, r#"{"text": ...}"#) {
-            Ok(r) => r,
-            Err(e) => return e,
-        };
+    pub fn lint(doc: &[u8]) -> Vec<u8> {
         let opt = SchemaOptions {
             list: true,
             ..SchemaOptions::default()
         };
-        match lint_document(r.text.as_bytes(), None, &opt) {
+        match lint_document(doc, None, &opt) {
             Ok(res) => json::to_string(&res).into_bytes(),
             Err(e) => error(e),
         }
@@ -65,34 +106,66 @@ mod ops {
 
     #[derive(Deserialize)]
     struct CheckReq {
-        specs: Vec<String>,
-        manifest: String,
         #[serde(default)]
         probes: HashMap<String, Probe>,
         now: String,
     }
 
     #[derive(Serialize)]
-    struct CheckResult {
+    struct CheckResult<'a> {
         reports: Vec<Report>,
         #[serde(skip_serializing_if = "Vec::is_empty")]
         notes: Vec<String>,
         /// Each report's target to the screens it covers, for drawing proofs.
-        requirements: BTreeMap<String, Vec<RequirementsView>>,
+        requirements: BTreeMap<String, Views<'a>>,
     }
 
-    fn try_check(req: &[u8]) -> Result<Vec<u8>, Vec<u8>> {
-        let r: CheckReq = parse(
-            req,
-            r#"{"specs": [...], "manifest": "...", "probes": {...}, "now": "RFC 3339"}"#,
-        )?;
-        let docs = r
-            .specs
-            .iter()
-            .map(|s| decode_document(s.as_bytes()))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(error)?;
-        let m = decode_manifest(r.manifest.as_bytes()).map_err(error)?;
+    /// The views of the screens a reference covers, worked out as they are
+    /// written, so a format of hundreds of thousands of screens is never
+    /// held as views.
+    struct Views<'a> {
+        doc: &'a opencrs::model::Document,
+        target: opencrs::resolve::Ref,
+    }
+
+    impl Serialize for Views<'_> {
+        fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
+            use serde::ser::{Error as _, SerializeSeq};
+            let mut seq = ser.serialize_seq(None)?;
+            let mut err = None;
+            let resolved = self.doc.resolve_each(&self.target, |q| {
+                if err.is_none()
+                    && let Err(e) = seq.serialize_element(&q.view())
+                {
+                    err = Some(e);
+                }
+            });
+            match (err, resolved) {
+                (Some(e), _) => Err(e),
+                (None, Err(e)) => Err(S::Error::custom(e)),
+                (None, Ok(())) => seq.end(),
+            }
+        }
+    }
+
+    fn try_check(req: Vec<u8>) -> Result<Vec<u8>, Vec<u8>> {
+        let (r, docs, m) = {
+            let f: Frame<CheckReq> = frame(
+                &req,
+                r#"{"probes": {...}, "now": "RFC 3339", "blobs": [manifest, spec, ...]}"#,
+            )?;
+            let [manifest, specs @ ..] = f.blobs.as_slice() else {
+                return Err(error("usage: check needs a manifest"));
+            };
+            let docs = specs
+                .iter()
+                .map(|s| decode_document(s))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(error)?;
+            let m = decode_manifest(manifest).map_err(error)?;
+            (f.header, docs, m)
+        };
+        drop(req);
         let now = DateTime::parse_from_rfc3339(&r.now).map_err(error)?;
         let (reports, notes) =
             check_manifest(&docs, &m, &r.probes, &Options::new(now)).map_err(error)?;
@@ -104,39 +177,38 @@ mod ops {
             let Ok(rf) = parse_ref(&rep.target) else {
                 continue;
             };
-            for d in &docs {
-                if let Ok(reqs) = d.resolve(&rf) {
-                    requirements.insert(
-                        rep.target.clone(),
-                        reqs.iter().map(|q| q.view()).collect::<Vec<_>>(),
-                    );
-                    break;
-                }
+            // The first document that resolves the target answers for it.
+            if let Some(doc) = docs.iter().find(|d| d.resolve_each(&rf, |_| {}).is_ok()) {
+                requirements.insert(rep.target.clone(), Views { doc, target: rf });
             }
         }
-        Ok(json::to_string(&CheckResult {
+        Ok(json::to_bytes_sized(&CheckResult {
             reports,
             notes,
             requirements,
-        })
-        .into_bytes())
+        }))
     }
 
-    pub fn check(req: &[u8]) -> Vec<u8> {
+    pub fn check(req: Vec<u8>) -> Vec<u8> {
         try_check(req).unwrap_or_else(|e| e)
     }
 
     #[derive(Deserialize)]
     struct ResolveReq {
-        spec: String,
         #[serde(rename = "ref")]
         reference: String,
     }
 
-    fn try_resolve(req: &[u8]) -> Result<Vec<u8>, Vec<u8>> {
-        let r: ResolveReq = parse(req, r#"{"spec": "...", "ref": "..."}"#)?;
-        let d = decode_document(r.spec.as_bytes()).map_err(error)?;
-        let rf = parse_ref(&r.reference).map_err(error)?;
+    fn try_resolve(req: Vec<u8>) -> Result<Vec<u8>, Vec<u8>> {
+        let (reference, d) = {
+            let f: Frame<ResolveReq> = frame(&req, r#"{"ref": "...", "blobs": [spec]}"#)?;
+            let [spec] = f.blobs.as_slice() else {
+                return Err(error("usage: resolve needs one spec"));
+            };
+            (f.header.reference, decode_document(spec).map_err(error)?)
+        };
+        drop(req);
+        let rf = parse_ref(&reference).map_err(error)?;
         let views: Vec<RequirementsView> = d
             .resolve(&rf)
             .map_err(error)?
@@ -146,7 +218,7 @@ mod ops {
         Ok(json::to_string(&views).into_bytes())
     }
 
-    pub fn resolve(req: &[u8]) -> Vec<u8> {
+    pub fn resolve(req: Vec<u8>) -> Vec<u8> {
         try_resolve(req).unwrap_or_else(|e| e)
     }
 
@@ -332,6 +404,16 @@ mod ops {
             serde_json::from_slice(&b).unwrap()
         }
 
+        /// A frame as `ops` reads them: header, then the documents.
+        fn framed(mut header: Value, blobs: &[&[u8]]) -> Vec<u8> {
+            header["blobs"] = blobs.iter().map(|b| b.len()).collect::<Vec<_>>().into();
+            let head = serde_json::to_vec(&header).unwrap();
+            let mut out = (head.len() as u32).to_le_bytes().to_vec();
+            out.extend(head);
+            blobs.iter().for_each(|b| out.extend_from_slice(b));
+            out
+        }
+
         fn example(name: &str) -> Vec<u8> {
             let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../../examples/harbourline")
@@ -346,18 +428,15 @@ mod ops {
 
         #[test]
         fn lint_clean_example_and_garbage() {
-            let text = String::from_utf8(example("retail.screens.json")).unwrap();
-            let req = serde_json::to_vec(&json!({ "text": text })).unwrap();
-            let v = val(lint(&req));
+            let v = val(lint(&example("retail.screens.json")));
             assert_eq!(v["kind"], "screens");
             assert!(v.get("schema_errors").is_none() && v.get("document_checks").is_none());
-            assert!(val(lint(br#"{"text":"{}"}"#))["error"].is_string());
+            assert!(val(lint(b"{}"))["error"].is_string());
             assert!(val(lint(b"nonsense"))["error"].is_string());
         }
 
         #[test]
         fn check_and_resolve_the_example() {
-            let text = |n: &str| String::from_utf8(example(n)).unwrap();
             let png = |n: &str| example(n);
             let mut probes = serde_json::Map::new();
             for n in ["lunch-portrait.png", "lunch-portrait-logo-right.png"] {
@@ -375,20 +454,37 @@ mod ops {
                 }
                 probes.insert(n.into(), v["probe"].clone());
             }
-            let req = json!({"specs": [text("retail.screens.json")], "manifest": text("creative.json"),
-                "probes": probes, "now": "2026-10-22T12:00:00+11:00"});
-            let v = val(check(&serde_json::to_vec(&req).unwrap()));
+            let spec = example("retail.screens.json");
+            let req = framed(
+                json!({"probes": probes, "now": "2026-10-22T12:00:00+11:00"}),
+                &[&example("creative.json"), &spec],
+            );
+            let v = val(check(req));
             assert!(v["error"].is_null(), "{v}");
             assert!(v["reports"].as_array().unwrap().len() >= 2);
             let t = "harbourline.example/retail/portrait-totem-75";
             assert_eq!(v["requirements"][t].as_array().unwrap().len(), 2);
 
-            let r = json!({"spec": text("retail.screens.json"), "ref": t});
-            let v = val(resolve(&serde_json::to_vec(&r).unwrap()));
+            let v = val(resolve(framed(json!({"ref": t}), &[&spec])));
             assert_eq!(v.as_array().unwrap().len(), 2);
-            let r = json!({"spec": text("retail.screens.json"), "ref": "nonsense"});
-            assert!(val(resolve(&serde_json::to_vec(&r).unwrap()))["error"].is_string());
-            assert!(val(check(br#"{"specs":[],"manifest":"{}","now":""}"#))["error"].is_string());
+            let r = framed(json!({"ref": "nonsense"}), &[&spec]);
+            assert!(val(resolve(r))["error"].is_string());
+            let r = framed(json!({"now": ""}), &[b"{}"]);
+            assert!(val(check(r))["error"].is_string());
+            // Malformed frames are errors, not panics.
+            for bad in [&b""[..], b"\xff\xff\xff\xff{}", b"\x02\0\0\0{}"] {
+                assert!(val(check(bad.to_vec()))["error"].is_string());
+                assert!(val(resolve(bad.to_vec()))["error"].is_string());
+            }
+            let r = framed(json!({"now": "2026-10-22T12:00:00+11:00"}), &[b"{}"]);
+            let mut short = r.clone();
+            short.pop();
+            assert!(
+                val(check(short))["error"]
+                    .as_str()
+                    .unwrap()
+                    .contains("frame")
+            );
         }
 
         #[test]
@@ -537,9 +633,27 @@ mod abi {
     }
 
     op!(opencrs_version, ops::version);
+    /// Takes ownership of the allocation at `(ptr, len)`.
+    ///
+    /// # Safety
+    /// `(ptr, len)` must be a live allocation from `opencrs_alloc` that the
+    /// caller never uses or frees again.
+    unsafe fn owned(ptr: u32, len: u32) -> Vec<u8> {
+        unsafe { Vec::from_raw_parts(ptr as *mut u8, len as usize, len as usize) }
+    }
+
+    macro_rules! consuming {
+        ($name:ident, $f:path) => {
+            #[unsafe(no_mangle)]
+            pub extern "C" fn $name(ptr: u32, len: u32) -> u64 {
+                give($f(unsafe { owned(ptr, len) }))
+            }
+        };
+    }
+
     op!(opencrs_lint, ops::lint);
-    op!(opencrs_check, ops::check);
-    op!(opencrs_resolve, ops::resolve);
+    consuming!(opencrs_check, ops::check);
+    consuming!(opencrs_resolve, ops::resolve);
     op!(opencrs_legibility, ops::legibility);
     op!(opencrs_dwell, ops::dwell);
     op!(opencrs_rule_packs, ops::rule_packs);

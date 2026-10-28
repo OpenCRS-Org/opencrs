@@ -5,7 +5,7 @@
 //
 //   import { load } from "./opencrs.js";
 //   const crs = await load(new URL("./opencrs.wasm", import.meta.url));
-//   crs.lint(text);                                   // JSON string
+//   crs.lint(text);                      // text or UTF-8 bytes; JSON string
 //   await crs.check([specText], creativeText, files, now); // JSON string
 //   crs.resolve(specText, ref);                       // JSON string
 //   crs.legibility({ distance_m: [2, 6] });           // JSON string
@@ -83,6 +83,31 @@ export async function load(source) {
         if (current === x) x.opencrs_free(ptr, data.length);
       }
     });
+  // The calls that carry documents hand the module the raw bytes and give up
+  // the allocation: the module frees it as soon as it has decoded them.
+  const callOwned = (name, parts) =>
+    guard(() => {
+      const x = exports_();
+      let total = 0;
+      for (const p of parts) total += p.length;
+      const ptr = x.opencrs_alloc(total);
+      let at = ptr;
+      for (const p of parts) {
+        view(at, p.length).set(p);
+        at += p.length;
+      }
+      return take(x[name](ptr, total));
+    });
+  // header is a request object; blobs are the documents that follow it in a
+  // frame: a little-endian u32 header length, the header JSON, then the blobs.
+  const callFramed = (name, header, blobs) => {
+    const bytes = blobs.map(toBytes);
+    const head = encoder.encode(JSON.stringify({ ...header, blobs: bytes.map((b) => b.length) }));
+    const len = new Uint8Array(4);
+    new DataView(len.buffer).setUint32(0, head.length, true);
+    return callOwned(name, [len, head, ...bytes]);
+  };
+  const toBytes = (doc) => (typeof doc === "string" ? encoder.encode(doc) : doc);
   const feed = (session, chunk) =>
     guard(() => {
       const x = exports_();
@@ -110,11 +135,21 @@ export async function load(source) {
 
   return {
     version: JSON.parse(call("opencrs_version", {})).version,
-    /** lint(text) checks one document of any kind. */
-    lint: (text) => call("opencrs_lint", { text }),
+    /** lint(doc) checks one document of any kind, given as text or UTF-8 bytes. */
+    lint: (doc) =>
+      guard(() => {
+        const x = exports_();
+        const data = toBytes(doc);
+        const ptr = put(data);
+        try {
+          return take(x.opencrs_lint(ptr, data.length));
+        } finally {
+          if (current === x) x.opencrs_free(ptr, data.length);
+        }
+      }),
     /**
      * check(specs, manifest, files, now) checks a creative.json against one
-     * or more screens.json texts. files maps manifest paths to Uint8Arrays;
+     * or more screens.json documents (text or UTF-8 bytes). files maps manifest paths to Uint8Arrays;
      * now is an RFC 3339 time or "".
      */
     async check(specs, manifest, files, now = "") {
@@ -126,13 +161,13 @@ export async function load(source) {
         for (const [name, data] of Object.entries(files ?? {})) {
           probes[name] = await probe(data instanceof Uint8Array ? data : new Uint8Array(data));
         }
-        return call("opencrs_check", { specs, manifest, probes, now });
+        return callFramed("opencrs_check", { probes, now }, [manifest, ...specs]);
       } catch (e) {
         return errorJSON(e);
       }
     },
     /** resolve(spec, ref) returns the requirements for a format or screen reference. */
-    resolve: (spec, ref) => call("opencrs_resolve", { spec, ref }),
+    resolve: (spec, ref) => callFramed("opencrs_resolve", { ref }, [spec]),
     /**
      * legibility({distance_m: [near, far], ratio?, screen?: {width_mm, width_px},
      * dwell_s?, rate?}) gives minimum text sizes and the word limit, worked out

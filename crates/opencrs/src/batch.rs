@@ -2,7 +2,7 @@
 //! the requirements view. Port of `crs/batch.go`.
 
 use crate::check::{Check, Severity};
-use crate::document::check_document;
+use crate::document::check_document_text;
 use crate::error::Error;
 use crate::legibility::TextClass;
 use crate::model::{CreativeFile, Document, Insets, Manifest, Media, Region, Segment, Viewing};
@@ -167,9 +167,11 @@ pub fn lint(raw: &[u8], kind: Option<Kind>, opt: &SchemaOptions) -> Result<LintR
         document_checks: Vec::new(),
     };
     if res.schema_errors.is_empty() && kind == Kind::Screens {
-        // A list of screens documents has no single document to check.
-        if let Ok(d) = serde_json::from_slice::<Document>(raw) {
-            res.document_checks = check_document(&d);
+        // A list of screens documents has no single document to check. The
+        // checks read the text a screen at a time, so a very large document
+        // is never decoded whole.
+        if let Some(checks) = std::str::from_utf8(raw).ok().and_then(check_document_text) {
+            res.document_checks = checks;
         }
     }
     Ok(res)

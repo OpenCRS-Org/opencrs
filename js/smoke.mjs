@@ -68,6 +68,35 @@ for (const [name, data] of Object.entries(files)) {
   assert.ok(after <= 16 * 1024 * 1024, `memory grew to ${after} (from ${before})`);
 }
 
+// A document at the spec's 50 MB limit (190,000 screens, all on one format
+// that carries one finding) lints within 128 MiB and checks within 256 MiB,
+// and a target covering every screen answers in seconds, not minutes.
+{
+  const rows = [];
+  for (let i = 0; i < 190000; i++) {
+    rows.push(`{"id":"S-${String(i).padStart(7, "0")}","format":"fmt-0","venue":"venue-${i % 500}","placement":{"environment":"indoor","level":"L1","zone":"food court area number ${i % 97}"},"viewing":{"distance_m":[2,6],"dwell_s":4,"approach":"head-on","light":"indoor"},"platform_ids":{"cms-a":"frame-${i}"}}`);
+  }
+  const venues = Array.from({ length: 500 }, (_, i) => ({ id: `venue-${i}`, name: `Venue ${i}` }));
+  const format = { id: "fmt-0", pixels: [1080, 1920], media: { static: ["image/png"] }, rules: { rule_packs: ["nope@1"] } };
+  const big = `{"opencrs":"0.1","publisher":"big.example","updated_at":"2026-10-20T09:00:00+11:00","networks":[{"id":"net","name":"Big","venues":${JSON.stringify(venues)},"formats":[${JSON.stringify(format)}],"screens":[${rows.join(",")}]}]}`;
+  assert.ok(big.length > 40 * 1024 * 1024 && big.length < 50 * 1024 * 1024, `document is ${big.length} bytes`);
+  const manifest = JSON.stringify({ opencrs: "0.1", files: [{ file: "a.png", media_type: "image/png", pixels: [1080, 1920], targets: ["big.example/net/fmt-0"] }] });
+
+  const linter = await load(wasmBytes);
+  const lintBig = JSON.parse(linter.lint(big));
+  assert.equal(lintBig.document_checks.length, 1);
+  assert.equal(lintBig.document_checks[0].screens.length, 190000);
+  assert.ok(linter.memoryBytes() <= 128 * 1024 * 1024, `lint used ${linter.memoryBytes()} bytes`);
+
+  const checker = await load(wasmBytes);
+  const started = Date.now();
+  const checkBig = JSON.parse(await checker.check([big], manifest, {}, "2026-10-28T00:00:00Z"));
+  assert.ok(!checkBig.error, checkBig.error);
+  assert.equal(checkBig.requirements["big.example/net/fmt-0"].length, 190000);
+  assert.ok(Date.now() - started < 60_000, `check took ${Date.now() - started} ms`);
+  assert.ok(checker.memoryBytes() <= 256 * 1024 * 1024, `check used ${checker.memoryBytes()} bytes`);
+}
+
 // After a trap the loader discards the instance and the next call works.
 assert.throws(() => api._trap(), WebAssembly.RuntimeError);
 assert.equal(JSON.parse(api.lint(screens)).kind, "screens", "a fresh instance after a trap");

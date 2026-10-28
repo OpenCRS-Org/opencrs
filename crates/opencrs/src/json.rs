@@ -148,6 +148,35 @@ fn render<T: Serialize + ?Sized>(v: &T, f: GoFormatter) -> String {
     String::from_utf8(buf).expect("JSON is UTF-8")
 }
 
+/// Go's `json.Marshal` as bytes, in a buffer of exactly the right size: the
+/// value is written twice, the first time only to count, so a very large
+/// result is never copied by a growing buffer.
+pub fn to_bytes_sized<T: Serialize + ?Sized>(v: &T) -> Vec<u8> {
+    struct Count(usize);
+    impl io::Write for Count {
+        fn write(&mut self, b: &[u8]) -> io::Result<usize> {
+            self.0 += b.len();
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut n = Count(0);
+    v.serialize(&mut Serializer::with_formatter(
+        &mut n,
+        GoFormatter::new(false, true),
+    ))
+    .expect("model types serialise to JSON");
+    let mut buf = Vec::with_capacity(n.0);
+    v.serialize(&mut Serializer::with_formatter(
+        &mut buf,
+        GoFormatter::new(false, true),
+    ))
+    .expect("model types serialise to JSON");
+    buf
+}
+
 /// Go's `json.Marshal`: compact, with `<`, `>` and `&` escaped.
 pub fn to_string<T: Serialize + ?Sized>(v: &T) -> String {
     render(v, GoFormatter::new(false, true))

@@ -5,6 +5,7 @@ use jsonschema::error::ValidationErrorKind;
 use jsonschema::{ErrorIterator, Registry, Validator};
 use serde::Serialize;
 use serde_json::Value;
+use serde_json::value::RawValue;
 use std::collections::HashSet;
 use std::fmt;
 use std::str::FromStr;
@@ -87,7 +88,17 @@ impl FromStr for Kind {
     }
 }
 
-type Compiled = Vec<(Kind, Validator)>;
+/// A screens.json's three big arrays, each validated an item at a time.
+struct Items {
+    venue: Validator,
+    format: Validator,
+    screen: Validator,
+}
+
+struct Compiled {
+    kinds: Vec<(Kind, Validator)>,
+    items: Items,
+}
 
 fn schemas() -> Result<&'static Compiled, Error> {
     static COMPILED: OnceLock<Result<Compiled, String>> = OnceLock::new();
@@ -121,12 +132,40 @@ fn compile() -> Result<Compiled, String> {
             .map_err(|e| e.to_string())?;
         out.push((kind, v));
     }
-    Ok(out)
+    let item = |def: &str| {
+        jsonschema::options()
+            .with_registry(&registry)
+            .build(&serde_json::json!({
+                "$ref": format!("{BASE_URL}screens.schema.json#/$defs/{def}")
+            }))
+            .map_err(|e| e.to_string())
+    };
+    Ok(Compiled {
+        kinds: out,
+        items: Items {
+            venue: item("venue")?,
+            format: item("format")?,
+            screen: item("screen")?,
+        },
+    })
 }
 
 /// Guesses a document's kind from its top-level keys. For a JSON array (such
 /// as the CLI's list of reports) it uses the first element.
 pub fn detect_kind(raw: &[u8]) -> Result<Kind, Error> {
+    // The top-level keys are all that's needed, so read them without
+    // building the document: its values stay unparsed slices of `raw`.
+    let keys = serde_json::from_slice::<RawMap>(raw)
+        .ok()
+        .map(|m| m.into_keys().collect::<Vec<_>>())
+        .or_else(|| {
+            let list = serde_json::from_slice::<Vec<&RawValue>>(raw).ok()?;
+            let m: RawMap = serde_json::from_str(list.first()?.get()).ok()?;
+            Some(m.into_keys().collect())
+        });
+    if let Some(keys) = keys {
+        return kind_of(|k| keys.iter().any(|x| x == k));
+    }
     let mut v: Value = serde_json::from_slice(raw)?;
     if let Some(first) = v.as_array().and_then(|a| a.first()) {
         v = first.clone();
@@ -134,7 +173,10 @@ pub fn detect_kind(raw: &[u8]) -> Result<Kind, Error> {
     let Some(m) = v.as_object() else {
         return Err(Error::msg("document is not a JSON object"));
     };
-    let has = |k: &str| m.contains_key(k);
+    kind_of(|k| m.contains_key(k))
+}
+
+fn kind_of(has: impl Fn(&str) -> bool) -> Result<Kind, Error> {
     if has("rule_pack") {
         Ok(Kind::RulePack)
     } else if has("networks") {
@@ -190,10 +232,16 @@ pub fn validate_schema(
 ) -> Result<Vec<SchemaError>, Error> {
     let all = schemas()?;
     let validator = &all
+        .kinds
         .iter()
         .find(|(k, _)| *k == kind)
         .ok_or_else(|| Error::msg("unknown document kind"))?
         .1;
+    if kind == Kind::Screens
+        && let Some(errs) = validate_screens_by_item(&all.items, validator, raw)
+    {
+        return Ok(errs);
+    }
     let v: Value = serde_json::from_slice(raw)?;
     let prepare = |mut v: Value| {
         if kind == Kind::Index && opt.allow_local_http {
@@ -264,19 +312,105 @@ fn secure_local_urls(v: &mut Value) {
 }
 
 fn validate_value(validator: &Validator, v: &Value) -> Vec<SchemaError> {
-    let errors: ErrorIterator<'_> = validator.iter_errors(v);
-    let found: Vec<(String, String, bool)> = errors
-        .map(|e| {
-            let branching = matches!(
-                e.kind(),
-                ValidationErrorKind::OneOfNotValid { .. }
-                    | ValidationErrorKind::OneOfMultipleValid { .. }
-                    | ValidationErrorKind::AnyOf { .. }
-            );
-            (e.instance_path().to_string(), e.to_string(), branching)
-        })
-        .collect();
+    let mut found = Vec::new();
+    collect_errors(validator, v, "", &mut found);
     drop_under_branches(found)
+}
+
+/// Adds every violation of `v` to `found` as (path, message, whether it is
+/// a failed oneOf/anyOf), with `prefix` put before each path.
+fn collect_errors(
+    validator: &Validator,
+    v: &Value,
+    prefix: &str,
+    found: &mut Vec<(String, String, bool)>,
+) {
+    let errors: ErrorIterator<'_> = validator.iter_errors(v);
+    found.extend(errors.map(|e| {
+        let branching = matches!(
+            e.kind(),
+            ValidationErrorKind::OneOfNotValid { .. }
+                | ValidationErrorKind::OneOfMultipleValid { .. }
+                | ValidationErrorKind::AnyOf { .. }
+        );
+        (
+            format!("{prefix}{}", e.instance_path()),
+            e.to_string(),
+            branching,
+        )
+    }));
+}
+
+type RawMap<'a> = std::collections::BTreeMap<String, &'a RawValue>;
+
+/// Validates a screens.json without ever holding the whole document as a
+/// `Value`, which for a document of hundreds of thousands of screens is
+/// several times the size of the text. The venues, formats and screens of
+/// each network are arrays whose items the schema checks independently
+/// (nothing in it looks at their count or compares them), so each is
+/// validated alone and the rest of the document, with those arrays emptied,
+/// is validated as a whole. The errors, paths and order are those of
+/// validating the whole document.
+///
+/// None means the document isn't shaped for this (or isn't valid JSON), and
+/// the caller validates it the ordinary way, which also gives the usual
+/// parse error.
+fn validate_screens_by_item(
+    items: &Items,
+    validator: &Validator,
+    raw: &[u8],
+) -> Option<Vec<SchemaError>> {
+    let mut root: RawMap = serde_json::from_slice(raw).ok()?;
+    let mut found = Vec::new();
+    let mut skeleton = serde_json::Map::new();
+    for (key, text) in std::mem::take(&mut root) {
+        if key != "networks" {
+            skeleton.insert(key, serde_json::from_str(text.get()).ok()?);
+            continue;
+        }
+        let Ok(networks) = serde_json::from_str::<Vec<&RawValue>>(text.get()) else {
+            skeleton.insert(key, serde_json::from_str(text.get()).ok()?);
+            continue;
+        };
+        let mut shells = Vec::with_capacity(networks.len());
+        for (n, net) in networks.into_iter().enumerate() {
+            let Ok(mut fields) = serde_json::from_str::<RawMap>(net.get()) else {
+                shells.push(serde_json::from_str(net.get()).ok()?);
+                continue;
+            };
+            let mut shell = serde_json::Map::new();
+            for (name, validator) in [
+                ("venues", &items.venue),
+                ("formats", &items.format),
+                ("screens", &items.screen),
+            ] {
+                let Some(text) = fields.remove(name) else {
+                    continue;
+                };
+                let Ok(list) = serde_json::from_str::<Vec<&RawValue>>(text.get()) else {
+                    shell.insert(name.into(), serde_json::from_str(text.get()).ok()?);
+                    continue;
+                };
+                shell.insert(name.into(), Value::Array(Vec::new()));
+                for (i, item) in list.into_iter().enumerate() {
+                    let v: Value = serde_json::from_str(item.get()).ok()?;
+                    collect_errors(
+                        validator,
+                        &v,
+                        &format!("/networks/{n}/{name}/{i}"),
+                        &mut found,
+                    );
+                }
+            }
+            for (name, text) in fields {
+                shell.insert(name, serde_json::from_str(text.get()).ok()?);
+            }
+            shells.push(Value::Object(shell));
+        }
+        skeleton.insert(key, Value::Array(shells));
+    }
+    collect_errors(validator, &Value::Object(skeleton), "", &mut found);
+    Some(drop_under_branches(found))
 }
 
 /// A failing oneOf/anyOf is reported once, at its own node: drops anything
@@ -335,6 +469,80 @@ mod tests {
         }
         out.sort_by(|a, b| a.path.cmp(&b.path));
         out
+    }
+
+    /// Validating a screens.json item by item gives what validating it whole
+    /// does, for documents that break the schema in many places.
+    #[test]
+    fn screens_by_item_match_the_whole_document() {
+        let base: Value =
+            serde_json::from_slice(&read("examples/harbourline/retail.screens.json")).unwrap();
+        let all = schemas().unwrap();
+        let sv = &all
+            .kinds
+            .iter()
+            .find(|(k, _)| *k == Kind::Screens)
+            .unwrap()
+            .1;
+        let whole = |v: &Value| validate_value(sv, v);
+        type Edit = Box<dyn Fn(&mut Value)>;
+        let edits: Vec<Edit> = vec![
+            Box::new(|_| {}),
+            Box::new(|v| v["networks"][0]["screens"][0]["format"] = 5.into()),
+            Box::new(|v| {
+                v["networks"][0]["screens"][0]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("id");
+            }),
+            Box::new(|v| v["networks"][0]["screens"][1]["viewing"]["distance_m"] = "far".into()),
+            Box::new(|v| {
+                v["networks"][0]["screens"][1]["location"] = serde_json::json!({"lat": 91})
+            }),
+            Box::new(|v| v["networks"][0]["formats"][0]["pixels"] = "big".into()),
+            Box::new(|v| v["networks"][0]["formats"][1]["media"] = serde_json::json!({})),
+            Box::new(|v| v["networks"][0]["venues"][0]["address"] = 7.into()),
+            Box::new(|v| v["networks"][0]["venues"] = serde_json::json!({})),
+            Box::new(|v| v["networks"][0]["screens"] = "none".into()),
+            Box::new(|v| v["networks"][0]["screens"] = serde_json::json!([1, null, []])),
+            Box::new(|v| {
+                v["networks"][0].as_object_mut().unwrap().remove("formats");
+            }),
+            Box::new(|v| v["networks"] = serde_json::json!([1, {"id": "x"}])),
+            Box::new(|v| v["networks"] = serde_json::json!({})),
+            Box::new(|v| v["publisher"] = 1.into()),
+            Box::new(|v| {
+                for s in v["networks"][0]["screens"].as_array_mut().unwrap() {
+                    s["id"] = "bad id!".into();
+                    s["rules"] = serde_json::json!({"max_words": "x", "rule_packs": [1]});
+                }
+            }),
+        ];
+        for (i, edit) in edits.iter().enumerate() {
+            let mut v = base.clone();
+            edit(&mut v);
+            let raw = serde_json::to_vec(&v).unwrap();
+            let want = whole(&v);
+            assert_eq!(
+                validate_screens_by_item(&all.items, sv, &raw),
+                Some(want.clone()),
+                "edit {i}"
+            );
+            assert_eq!(
+                validate_schema(Kind::Screens, &raw, &SchemaOptions::default()).unwrap(),
+                want,
+                "edit {i}"
+            );
+        }
+        // Text that isn't a document falls back to the usual path and error.
+        for bad in [&b"{"[..], b"[]", b"7", b"{\"networks\":[1,"] {
+            assert!(
+                validate_screens_by_item(&all.items, sv, bad).is_none()
+                    || serde_json::from_slice::<Value>(bad).is_ok(),
+                "{}",
+                String::from_utf8_lossy(bad)
+            );
+        }
     }
 
     #[test]
@@ -510,7 +718,7 @@ mod tests {
             "{err}"
         );
         let d = crate::decode_document(&read("examples/harbourline/retail.screens.json")).unwrap();
-        assert!(!d.source.is_empty() && !d.networks.is_empty());
+        assert!(!d.networks.is_empty());
         crate::decode_manifest(&read("examples/harbourline/creative.json")).unwrap();
     }
 }

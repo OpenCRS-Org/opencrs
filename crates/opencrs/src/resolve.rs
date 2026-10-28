@@ -141,6 +141,20 @@ impl Document {
     /// one result; a format reference gives one per screen using that
     /// format, or one format-only result if no screen uses it.
     pub fn resolve(&self, r: &Ref) -> Result<Vec<Requirements<'_>>, ResolveError> {
+        let mut out = Vec::new();
+        self.resolve_each(r, |q| out.push(q))?;
+        Ok(out)
+    }
+
+    /// [`resolve`](Self::resolve), handing each result to `each` as it is
+    /// worked out instead of collecting them, so a format with hundreds of
+    /// thousands of screens never has all its requirements at once. On an
+    /// error, `each` may already have seen the results before the fault.
+    pub fn resolve_each<'a>(
+        &'a self,
+        r: &Ref,
+        mut each: impl FnMut(Requirements<'a>),
+    ) -> Result<(), ResolveError> {
         if r.publisher != self.publisher {
             return Err(ResolveError::Other(format!(
                 "{r} belongs to {}, not {}",
@@ -162,7 +176,8 @@ impl Document {
                     quote(&n.id)
                 ))
             })?;
-            return Ok(vec![self.resolve_screen(n, s)?]);
+            each(self.resolve_screen(n, s)?);
+            return Ok(());
         }
         let f = n.format(&r.format).ok_or_else(|| {
             ResolveError::Other(format!(
@@ -171,14 +186,15 @@ impl Document {
                 quote(&n.id)
             ))
         })?;
-        let mut out = Vec::new();
+        let mut any = false;
         for s in n.screens.iter().filter(|s| s.format == f.id) {
-            out.push(self.resolve_screen(n, s)?);
+            each(self.resolve_screen(n, s)?);
+            any = true;
         }
-        if out.is_empty() {
-            out.push(self.build(n, f, None, None));
+        if !any {
+            each(self.build(n, f, None, None));
         }
-        Ok(out)
+        Ok(())
     }
 
     fn network(&self, id: &str) -> Option<&Network> {

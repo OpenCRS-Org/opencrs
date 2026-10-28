@@ -11,7 +11,7 @@ use crate::resolve::{ResolveError, parse_ref};
 use crate::rulepack::{RulePacks, builtin_rule_packs};
 use chrono::{DateTime, FixedOffset, SecondsFormat};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 /// A report's overall outcome.
@@ -161,9 +161,22 @@ pub fn validate(
     let sha256 = facts.sha256.clone();
     checks.extend(stale_check(doc, &opt.now));
 
-    let mut per_screen = Vec::new();
-    let mut ids = Vec::new();
-    match doc.resolve(&r) {
+    // Each screen's findings are merged as they come, so a format with
+    // hundreds of thousands of screens never holds them all.
+    let mut merger = Merger::default();
+    let resolved = doc.resolve_each(&r, |req| {
+        let c = Checker {
+            req: &req,
+            file: input.file,
+            campaign: input.campaign,
+            facts: facts.clone(),
+            margin: opt.warn_margin,
+            rule_packs: opt.rule_packs,
+            out: Vec::new(),
+        };
+        merger.add(c.run(), req.screen_id());
+    });
+    match resolved {
         Err(e) => {
             let code = match e {
                 ResolveError::Reference(_) => CODE_REFERENCE,
@@ -171,23 +184,8 @@ pub fn validate(
             };
             checks.push(Check::new(code, Severity::Error, e.to_string()));
         }
-        Ok(reqs) => {
-            for req in &reqs {
-                let c = Checker {
-                    req,
-                    file: input.file,
-                    campaign: input.campaign,
-                    facts: facts.clone(),
-                    margin: opt.warn_margin,
-                    rule_packs: opt.rule_packs,
-                    out: Vec::new(),
-                };
-                per_screen.push(c.run());
-                ids.push(req.screen_id().to_string());
-            }
-        }
+        Ok(()) => checks.extend(merger.finish()),
     }
-    checks.extend(merge_screens(per_screen, &ids));
 
     let result = outcome(&checks);
     Ok(Report {
@@ -231,12 +229,22 @@ fn stale_check(doc: &Document, now: &DateTime<FixedOffset>) -> Vec<Check> {
 /// Collapses identical findings from several screens into one, listing the
 /// screens it applies to. A finding that applies to every screen of the
 /// target lists none.
-fn merge_screens(per_screen: Vec<Vec<Check>>, ids: &[String]) -> Vec<Check> {
-    type Key = (String, String, String, String, Severity, Option<[i64; 4]>);
-    let mut index: HashMap<Key, usize> = HashMap::new();
-    let mut out: Vec<Check> = Vec::new();
-    for (i, cs) in per_screen.into_iter().enumerate() {
-        for c in cs {
+#[derive(Default)]
+struct Merger {
+    index: HashMap<MergeKey, usize>,
+    out: Vec<Check>,
+    /// The (finding, screen id) pairs already listed, so a finding that
+    /// covers every screen of a large target stays linear.
+    listed: HashSet<(usize, String)>,
+    screens: usize,
+}
+
+type MergeKey = (String, String, String, String, Severity, Option<[i64; 4]>);
+
+impl Merger {
+    fn add(&mut self, checks: Vec<Check>, id: &str) {
+        self.screens += 1;
+        for c in checks {
             let key = (
                 c.code.clone(),
                 c.message.clone(),
@@ -245,29 +253,33 @@ fn merge_screens(per_screen: Vec<Vec<Check>>, ids: &[String]) -> Vec<Check> {
                 c.severity,
                 c.rect_px.map(|r| r.0),
             );
-            if let Some(&at) = index.get(&key) {
-                let existing = &mut out[at];
-                if !ids[i].is_empty() && !existing.screens.contains(&ids[i]) {
-                    existing.screens.push(ids[i].clone());
+            if let Some(&at) = self.index.get(&key) {
+                if !id.is_empty() && self.listed.insert((at, id.to_string())) {
+                    self.out[at].screens.push(id.to_string());
                 }
                 continue;
             }
             let mut cc = c;
-            cc.screens = if ids[i].is_empty() {
+            cc.screens = if id.is_empty() {
                 Vec::new()
             } else {
-                vec![ids[i].clone()]
+                self.listed.insert((self.out.len(), id.to_string()));
+                vec![id.to_string()]
             };
-            index.insert(key, out.len());
-            out.push(cc);
+            self.index.insert(key, self.out.len());
+            self.out.push(cc);
         }
     }
-    for c in &mut out {
-        if c.screens.len() == ids.len() {
-            c.screens.clear();
+
+    fn finish(self) -> Vec<Check> {
+        let mut out = self.out;
+        for c in &mut out {
+            if c.screens.len() == self.screens {
+                c.screens.clear();
+            }
         }
+        out
     }
-    out
 }
 
 /// Applies the spec's precedence: any error fails; otherwise any unchecked
@@ -295,6 +307,19 @@ pub fn outcome(checks: &[Check]) -> Outcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn merging_lists_each_screen_once_and_drops_a_full_list() {
+        let finding = |m: &str| vec![Check::new("CRS-X", Severity::Error, m)];
+        let mut m = Merger::default();
+        m.add([finding("all"), finding("some")].concat(), "a");
+        m.add([finding("all"), finding("all")].concat(), "b");
+        let out = m.finish();
+        assert_eq!(out.len(), 2);
+        // "all" is on both screens, so it lists none; "some" lists its one.
+        assert!(out[0].screens.is_empty(), "{:?}", out[0].screens);
+        assert_eq!(out[1].screens, ["a"]);
+    }
     use crate::json;
     use crate::model::*;
     use crate::schema::{Kind, validate_schema};
