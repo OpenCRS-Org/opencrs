@@ -5,7 +5,9 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { createRequire } from "node:module";
-import { fileURLToPath } from "node:url";
+import { createServer } from "node:http";
+import { gzipSync } from "node:zlib";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const require = createRequire(import.meta.url);
 const opencrs = require("../index.js");
@@ -268,5 +270,208 @@ test("checkDir rejects symlinks out of the directory, FIFOs and directories", { 
     assert.throws(() => opencrs.probe("/dev/zero"), /not a regular file/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// The calls that take plain data are compared with the WebAssembly build, the
+// same core as the browser and Go run: the results must be equal, not merely
+// alike.
+const { load } = await import(pathToFileURL(join(root, "js/opencrs.js")).href);
+const wasm = await load(readFileSync(join(root, "opencrs.wasm")));
+const viaWasm = (s) => JSON.parse(s);
+
+test("every operation in parity/operations.json is exported, and nothing else is", () => {
+  const manifest = JSON.parse(readFileSync(join(root, "parity/operations.json"), "utf8"));
+  const listed = new Set(manifest.helpers.npm);
+  for (const [op, entry] of Object.entries(manifest.operations)) {
+    const names = entry.npm;
+    if (names === null) {
+      assert.ok(manifest.exceptions[`npm.${op}`], `${op}: no npm name and no exception`);
+      continue;
+    }
+    assert.ok(Array.isArray(names) && names.length > 0, `${op}: npm needs a list of names or null`);
+    assert.equal(manifest.exceptions[`npm.${op}`], undefined, `${op}: has npm names and an exception`);
+    for (const name of names) {
+      assert.equal(typeof opencrs[name], "function", `${op}: npm has no ${name}`);
+      listed.add(name);
+    }
+  }
+  assert.deepEqual(Object.keys(opencrs).sort(), [...listed].sort(), "an export is missing from the manifest");
+});
+
+test("legibility is the spec's worked example, and what the WebAssembly build says", () => {
+  const req = { distance_m: [2, 6], screen: { width_mm: 940, width_px: 1080 }, dwell_s: 4 };
+  const res = opencrs.legibility(req);
+  assert.equal(res.ratio, 150);
+  assert.deepEqual(res.key, { mm: 40, px: 46, px_exact: 45.96, basis: "at 6 m, ratio 150" });
+  assert.deepEqual(res.legal, { mm: 13.3, px: 16, px_exact: 15.32, basis: "at 2 m, ratio 150" });
+  assert.deepEqual(res.words, { value: 8, basis: "4 s dwell at 2 words/s" });
+  assert.deepEqual(res, viaWasm(wasm.legibility(req)));
+  const bare = { distance_m: [3, 10], ratio: 250 };
+  assert.deepEqual(opencrs.legibility(bare), viaWasm(wasm.legibility(bare)));
+  assert.equal(opencrs.legibility(bare).key.px, undefined);
+});
+
+test("legibility errors throw Error with the core's message", () => {
+  assert.throws(() => opencrs.legibility({ distance_m: [6, 2] }), /the near distance \(6 m\) is past the far one \(2 m\)/);
+  assert.throws(() => opencrs.legibility({}), (e) => e instanceof Error && e.message.startsWith("usage:"));
+  assert.throws(() => opencrs.legibility({ distance_m: [2, 6], ratio: 0 }), /ratio must be a number above zero/);
+});
+
+test("dwell gives the glance and each pack's limits, as the WebAssembly build does", () => {
+  const req = { speed_kmh: 80, distance_m: [20, 150], rule_packs: ["au-nsw-transport-corridor@2017-11"] };
+  const res = opencrs.dwell(req);
+  assert.equal(res.glance.words, 4);
+  assert.equal(res.glance.read_from_m, 64.44);
+  assert.equal(res.key.mm, 429.6);
+  assert.equal(res.packs[0].min_dwell_s, 25);
+  assert.equal(res.packs[0].motion_allowed, false);
+  assert.deepEqual(res, viaWasm(wasm.dwell(req)));
+  const slow = { speed_kmh: 60, distance_m: [20, 150], screen: { width_mm: 940, width_px: 1080 } };
+  assert.deepEqual(opencrs.dwell(slow), viaWasm(wasm.dwell(slow)));
+  assert.throws(() => opencrs.dwell({ ...req, rule_packs: ["x@1"] }), /unknown rule pack x@1/);
+});
+
+test("rulePacks lists the built-in packs, as the WebAssembly build does", () => {
+  const res = opencrs.rulePacks();
+  assert.equal(res.rule_packs.length, 6);
+  assert.ok(res.rule_packs.every((p) => p.ref && p.title && p.status));
+  assert.deepEqual(res, viaWasm(wasm.rulePacks()));
+});
+
+const index = () => readFileSync(join(harbourline, ".well-known/opencrs.json"), "utf8");
+const INDEX_URL = "https://harbourline.example/.well-known/opencrs.json";
+const DOC_URL = "https://harbourline.example/opencrs/retail.screens.json";
+const served = { cache_control: "max-age=60", etag: '"v1"', content_type: "application/json" };
+
+test("publisher asks for the index, then checks what it is given, as the WebAssembly build does", () => {
+  const first = opencrs.publisher("harbourline.example", {}, NOW);
+  assert.deepEqual(first.wanted, [INDEX_URL]);
+  assert.deepEqual(first.wanted_detail, [{ url: INDEX_URL, kind: "index", same_host: true }]);
+
+  const pages = {
+    [INDEX_URL]: { status: 200, body: index(), ...served },
+    [DOC_URL]: { status: 200, body: Buffer.from(spec()), ...served, allow_origin: "*" },
+  };
+  const res = opencrs.publisher("harbourline.example", pages, NOW);
+  assert.deepEqual(res.wanted, []);
+  assert.equal(res.errors, 0);
+  assert.equal(res.discovery.documents.length, 1);
+  assert.equal(res.discovery.documents[0].status, "trusted");
+  assert.equal(res.discovery.documents[0].screens, 3);
+  assert.deepEqual(res, viaWasm(wasm.publisher("harbourline.example", pages, NOW)));
+
+  // A document that wasn't fetched, and one that failed.
+  const part = { [INDEX_URL]: pages[INDEX_URL] };
+  const missing = opencrs.publisher("harbourline.example", part, NOW, "skipped for now");
+  assert.deepEqual(missing.wanted, [DOC_URL]);
+  assert.match(missing.discovery.documents[0].reason, /skipped for now/);
+  assert.deepEqual(missing, viaWasm(wasm.publisher("harbourline.example", part, NOW, "skipped for now")));
+  const gone = { ...part, [DOC_URL]: { status: 404 } };
+  assert.deepEqual(
+    opencrs.publisher("harbourline.example", gone, NOW),
+    viaWasm(wasm.publisher("harbourline.example", gone, NOW)),
+  );
+  const broke = { ...part, [DOC_URL]: { status: 0, error: "connection reset" } };
+  assert.match(opencrs.publisher("harbourline.example", broke, NOW).discovery.documents[0].reason, /connection reset/);
+});
+
+test("publisher reads bodies as bytes and its advice is about how they were served", () => {
+  const bare = { [INDEX_URL]: { status: 200, body: index() }, [DOC_URL]: { status: 200, body: spec() } };
+  const res = opencrs.publisher("harbourline.example", bare, NOW);
+  assert.ok(res.warnings >= 2, "no Cache-Control or ETag");
+  assert.ok(res.advice.some((a) => a.url === DOC_URL && /Cache-Control/.test(a.message)));
+  assert.deepEqual(res, viaWasm(wasm.publisher("harbourline.example", bare, NOW)));
+  // Not UTF-8: arrives as it is, and is not an index.
+  const bad = opencrs.publisher("harbourline.example", { [INDEX_URL]: { status: 200, body: Uint8Array.of(0x3c, 0xff) } }, NOW);
+  assert.equal(bad.errors, 1);
+  assert.ok(bad.error);
+});
+
+test("publisher throws Error for bad arguments", () => {
+  assert.throws(() => opencrs.publisher("harbourline.example", {}, "yesterday"), /not an RFC 3339 time/);
+  assert.throws(() => opencrs.publisher("harbourline.example", { [INDEX_URL]: 5 }));
+});
+
+test("fetchPublisher is async and says what the publisher check says of a domain that can't publish", async () => {
+  const p = opencrs.fetchPublisher("not a domain", { now: NOW });
+  assert.ok(p instanceof Promise);
+  const res = await p;
+  assert.match(res.error, /isn't a publisher domain/);
+  assert.equal(res.errors, 1);
+  assert.deepEqual(res, viaWasm(wasm.publisher("not a domain", {}, NOW)));
+  // Local names can't publish either, so a loopback server can't be pointed at.
+  assert.match((await opencrs.fetchPublisher("localhost")).error, /isn't a publisher domain/);
+  assert.match((await opencrs.fetchPublisher("127.0.0.1:1")).error, /isn't a publisher domain/);
+});
+
+test("fetchPublisher validates its options before fetching", () => {
+  assert.throws(() => opencrs.fetchPublisher("harbourline.example", { now: "later" }), /not an RFC 3339 time/);
+});
+
+/** A publisher on a local port: its index lists two documents, and the paths under /bad misbehave. */
+function localPublisher(handler) {
+  return new Promise((resolve) => {
+    const seen = [];
+    const server = createServer((req, res) => {
+      seen.push(req.url);
+      const addr = `127.0.0.1:${server.address().port}`;
+      handler(req, res, addr);
+    });
+    server.listen(0, "127.0.0.1", () => resolve({ server, seen, addr: `127.0.0.1:${server.address().port}` }));
+  });
+}
+
+test("discover reads a local publisher and judges its documents, off the event loop", async () => {
+  const doc = Buffer.from(spec());
+  const { server, seen, addr } = await localPublisher((req, res, addr) => {
+    if (req.url === "/.well-known/opencrs.json") {
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({
+        opencrs: "0.1",
+        publisher: { id: "harbourline.example", name: "Harbourline" },
+        documents: [
+          { url: `http://${addr}/retail.screens.json`, network: "retail" },
+          { url: `http://${addr}/slow.screens.json`, network: "retail" },
+          { url: `http://${addr}/metadata.screens.json`, network: "retail" },
+        ],
+      }));
+    } else if (req.url === "/retail.screens.json") {
+      res.setHeader("Content-Encoding", "gzip");
+      res.setHeader("Cache-Control", "max-age=3600");
+      res.end(gzipSync(doc));
+    } else if (req.url === "/slow.screens.json") {
+      setTimeout(() => res.end(doc), 400);
+    } else if (req.url === "/metadata.screens.json") {
+      res.statusCode = 302;
+      res.setHeader("Location", "https://169.254.169.254/latest/meta-data/");
+      res.end();
+    } else {
+      res.statusCode = 404;
+      res.end();
+    }
+  });
+  try {
+    let ticks = 0;
+    const timer = setInterval(() => ticks++, 20);
+    const res = await opencrs.discover(addr, { allowLocalHttp: true, now: NOW });
+    clearInterval(timer);
+    assert.ok(ticks >= 8, `the event loop ran only ${ticks} times in 400 ms`);
+    assert.equal(res.index.publisher.name, "Harbourline");
+    const by = Object.fromEntries(res.documents.map((d) => [d.url.split("/").pop(), d]));
+    assert.equal(by["retail.screens.json"].status, "trusted");
+    assert.equal(by["retail.screens.json"].screens, 3, "the gzipped body was read");
+    assert.equal(by["retail.screens.json"].cache_control, "max-age=3600");
+    assert.equal(by["slow.screens.json"].status, "trusted");
+    // A redirect to a cloud metadata address is refused, and nothing is sent there.
+    assert.equal(by["metadata.screens.json"].status, "failed");
+    assert.match(by["metadata.screens.json"].reason, /refusing to connect to 169\.254\.169\.254/);
+    // Without local testing, the local address isn't a publisher at all.
+    await assert.rejects(opencrs.discover(addr, { now: NOW }), /isn't a publisher domain/);
+    // An index that can't be fetched rejects.
+    await assert.rejects(opencrs.discover("127.0.0.1:1", { allowLocalHttp: true }), /refused|Connection|connect/i);
+    assert.ok(seen.includes("/.well-known/opencrs.json"));
+  } finally {
+    server.close();
   }
 });

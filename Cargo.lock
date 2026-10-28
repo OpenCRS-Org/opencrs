@@ -1131,9 +1131,21 @@ dependencies = [
  "clap",
  "clap_complete",
  "opencrs",
+ "opencrs-fetch",
  "serde",
  "serde_json",
  "tempfile",
+ "url",
+]
+
+[[package]]
+name = "opencrs-fetch"
+version = "0.1.2"
+dependencies = [
+ "chrono",
+ "flate2",
+ "opencrs",
+ "serde_json",
  "ureq",
  "url",
 ]
@@ -1142,10 +1154,12 @@ dependencies = [
 name = "opencrs-npm"
 version = "0.1.2"
 dependencies = [
+ "chrono",
  "napi",
  "napi-build",
  "napi-derive",
  "opencrs",
+ "opencrs-fetch",
  "serde",
  "serde_json",
 ]
@@ -1155,6 +1169,7 @@ name = "opencrs-py"
 version = "0.1.2"
 dependencies = [
  "opencrs",
+ "opencrs-fetch",
  "pyo3",
  "serde",
  "serde_json",
@@ -1852,7 +1867,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cde93ff05758a36a851a398a772b0b79a82fbe3c186a46f2696baaeaf84c966b"
 dependencies = [
  "base64",
- "flate2",
  "log",
  "percent-encoding",
  "rustls",

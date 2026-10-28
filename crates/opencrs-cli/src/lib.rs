@@ -1,20 +1,28 @@
 //! The `opencrs` command line: `check`, `schema`, `resolve`, `fetch`,
 //! `conformance`, `completion` and `version`, ported from `cmd/opencrs/main.go`
-//! and given a clap front end.
+//! and given a clap front end, and `probe`, `legibility`, `dwell`, `rule-packs`
+//! and `publisher`, which put the rest of the core on the command line.
 
 mod cli;
+mod cmd_calc;
 mod cmd_check;
 mod cmd_conformance;
 mod cmd_fetch;
+mod cmd_probe;
+mod cmd_publisher;
 mod cmd_resolve;
+mod cmd_rulepacks;
 mod cmd_schema;
 pub mod conformance;
 mod gotime;
-pub mod http;
+pub use opencrs_fetch::http;
 mod io;
 
 pub use cli::{DOCS_URL, Shell, command, write_completions};
-pub use cli::{EXIT_CHECK, EXIT_CONFORMANCE, EXIT_FETCH, EXIT_RESOLVE, EXIT_SCHEMA};
+pub use cli::{
+    EXIT_CALC, EXIT_CHECK, EXIT_CONFORMANCE, EXIT_FETCH, EXIT_PROBE, EXIT_PUBLISHER, EXIT_RESOLVE,
+    EXIT_RULE_PACKS, EXIT_SCHEMA,
+};
 
 use clap::FromArgMatches;
 use clap::error::ErrorKind;
@@ -76,6 +84,11 @@ pub fn run_styled(
         Cmd::Schema(a) => cmd_schema::run(a, stdout, stderr),
         Cmd::Resolve(a) => cmd_resolve::run(a, stdout, stderr),
         Cmd::Fetch(a) => cmd_fetch::run(a, stdout, stderr),
+        Cmd::Publisher(a) => cmd_publisher::run(a, stdout, stderr),
+        Cmd::Probe(a) => cmd_probe::run(a, stdout, stderr),
+        Cmd::Legibility(a) => cmd_calc::legibility(a, stdout, stderr),
+        Cmd::Dwell(a) => cmd_calc::dwell(a, stdout, stderr),
+        Cmd::RulePacks(a) => cmd_rulepacks::run(a, stdout, stderr),
         Cmd::Conformance(a) => cmd_conformance::run(a, stdout, stderr),
         Cmd::Completion(a) => {
             write_completions(a.shell, stdout);

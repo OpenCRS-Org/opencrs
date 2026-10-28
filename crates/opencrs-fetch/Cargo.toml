@@ -1,0 +1,26 @@
+[package]
+name = "opencrs-fetch"
+version = "0.1.2"
+description = "The SSRF-safe HTTP fetching shared by the OpenCRS command line and native bindings"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish = false
+
+[dependencies]
+opencrs = { path = "../opencrs" }
+chrono = { version = "0.4.45", default-features = false, features = ["alloc"] }
+# rustls with ring (no OpenSSL, builds on musl); trust the system store like Go.
+# "~3.5": the custom resolver uses ureq::unversioned, which may change in a
+# minor release. No "gzip" feature: ureq would strip Content-Encoding after
+# decoding, and the publisher check needs to see how a file was served.
+ureq = { version = "~3.5", default-features = false, features = ["rustls", "platform-verifier"] }
+flate2 = "1"
+url = "2.5.8"
+
+[dev-dependencies]
+serde_json = "1"
+
+[package.metadata.dist]
+dist = false

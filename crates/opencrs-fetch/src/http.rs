@@ -1,6 +1,7 @@
 //! The real `Fetcher`: ureq over HTTPS, with the spec's size limit and
 //! redirects followed by hand so unsafe ones can be refused. Port of
-//! `HTTPFetcher` in `discover/fetch.go`.
+//! `HTTPFetcher` in `discover/fetch.go`. [`Http`] is the one client under
+//! both [`UreqFetcher`] (discovery) and the publisher check's page fetching.
 //!
 //! Every host, redirects included, is resolved once and refused if any of
 //! its addresses is loopback, private, link-local, shared (CGNAT),
@@ -14,6 +15,7 @@
 use opencrs::discover::{
     FetchError, Fetcher, MAX_DOCUMENT_BYTES, Request, Response, scheme_allowed,
 };
+use std::io::Read;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::time::{Duration, Instant};
 use ureq::config::Config;
@@ -134,6 +136,161 @@ impl Resolver for GuardedResolver {
     }
 }
 
+/// What came back from one request, after redirects. The body is read, with
+/// gzip undone, only for a 200; the other headers are as served.
+#[derive(Debug, Clone, Default)]
+pub struct Reply {
+    pub status: u16,
+    pub body: Vec<u8>,
+    pub etag: String,
+    pub cache_control: String,
+    pub last_modified: String,
+    pub content_type: String,
+    pub content_encoding: String,
+    pub allow_origin: String,
+}
+
+/// The guarded HTTP client: HTTPS only (HTTP to localhost when allowed),
+/// every address checked after DNS and on every redirect, no proxy.
+pub struct Http {
+    agent: ureq::Agent,
+    allow_local: bool,
+    timeout: Duration,
+}
+
+impl Http {
+    /// `timeout` covers one request with its redirects; zero means 30
+    /// seconds.
+    pub fn new(allow_local: bool, timeout: Duration) -> Http {
+        // The system trust store, as Go's client uses.
+        let config = ureq::Agent::config_builder()
+            .proxy(None)
+            .max_redirects(0)
+            .max_redirects_will_error(false)
+            .http_status_as_error(false)
+            .user_agent("opencrs-validator/0.1")
+            .tls_config(
+                TlsConfig::builder()
+                    .root_certs(RootCerts::PlatformVerifier)
+                    .build(),
+            )
+            .build();
+        let agent = ureq::Agent::with_parts(
+            config,
+            DefaultConnector::default(),
+            GuardedResolver { allow_local },
+        );
+        let timeout = if timeout.is_zero() {
+            Duration::from_secs(30)
+        } else {
+            timeout
+        };
+        Http {
+            agent,
+            allow_local,
+            timeout,
+        }
+    }
+
+    /// Fetches `req.url`, following redirects by hand. A body of more than
+    /// `limit` bytes (once decompressed) is an error.
+    pub fn get(&self, req: &Request, limit: usize) -> Result<Reply, FetchError> {
+        let start = Url::parse(&req.url).map_err(|e| {
+            FetchError::Other(format!("parse {}: {e}", opencrs::gofmt::quote(&req.url)))
+        })?;
+        if !scheme_allowed(&start, self.allow_local) {
+            return Err(FetchError::Other(format!(
+                "{}: only https:// URLs can be fetched",
+                req.url
+            )));
+        }
+        // One deadline for the whole request, redirects included, like
+        // Go's http.Client.Timeout.
+        let deadline = Instant::now() + self.timeout;
+        let wrap = |url: &Url, why: String| FetchError::Other(format!("Get \"{url}\": {why}"));
+
+        let mut via = vec![start.clone()];
+        let mut current = start;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(wrap(
+                    &current,
+                    "context deadline exceeded (Client.Timeout exceeded while awaiting headers)"
+                        .into(),
+                ));
+            }
+            // Accept-Encoding is set here, not left to ureq: with its own
+            // gzip support on, ureq would decode the body and drop the
+            // Content-Encoding the publisher check reports on.
+            let mut r = self
+                .agent
+                .get(current.as_str())
+                .config()
+                .timeout_global(Some(remaining))
+                .build()
+                .header("Accept", "application/json")
+                .header("Accept-Encoding", "gzip");
+            if let Some(t) = &req.token {
+                r = r.header("Authorization", format!("Bearer {t}"));
+            }
+            let mut resp = r.call().map_err(|e| wrap(&current, e.to_string()))?;
+            let code = resp.status().as_u16();
+            if matches!(code, 301 | 302 | 303 | 307 | 308)
+                && let Some(loc) = resp.headers().get("location").and_then(|v| v.to_str().ok())
+            {
+                let next = current
+                    .join(loc)
+                    .map_err(|e| wrap(&current, format!("invalid redirect location: {e}")))?;
+                // Go names the Location as given, not the resolved URL.
+                check_redirect(&next, &via, req, self.allow_local)
+                    .map_err(|why| FetchError::Other(format!("Get \"{loc}\": {why}")))?;
+                via.push(next.clone());
+                current = next;
+                continue;
+            }
+            let header = |name: &str| {
+                resp.headers()
+                    .get(name)
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("")
+                    .to_string()
+            };
+            let mut reply = Reply {
+                status: code,
+                etag: header("etag"),
+                cache_control: header("cache-control"),
+                last_modified: header("last-modified"),
+                content_type: header("content-type"),
+                content_encoding: header("content-encoding"),
+                allow_origin: header("access-control-allow-origin"),
+                body: Vec::new(),
+            };
+            if code != 200 {
+                return Ok(reply);
+            }
+            let raw = resp.body_mut().with_config().limit(u64::MAX).reader();
+            let body: Box<dyn Read> = if reply.content_encoding.eq_ignore_ascii_case("gzip") {
+                Box::new(flate2::read::GzDecoder::new(raw))
+            } else {
+                Box::new(raw)
+            };
+            // The limit is on what a check would hold, so on the
+            // decompressed body.
+            body.take(limit as u64 + 1)
+                .read_to_end(&mut reply.body)
+                .map_err(|e| wrap(&current, e.to_string()))?;
+            if reply.body.len() > limit {
+                return Err(FetchError::Other(format!(
+                    "{}: larger than the {limit}-byte limit",
+                    req.url
+                )));
+            }
+            return Ok(reply);
+        }
+    }
+}
+
 pub struct UreqFetcher {
     /// Permit plain http:// to localhost, for publishers testing before
     /// they deploy.
@@ -186,125 +343,24 @@ fn check_redirect(next: &Url, via: &[Url], req: &Request, allow_local: bool) -> 
 
 impl Fetcher for UreqFetcher {
     fn fetch(&self, req: &Request) -> Result<Response, FetchError> {
-        let start = Url::parse(&req.url).map_err(|e| {
-            FetchError::Other(format!("parse {}: {e}", opencrs::gofmt::quote(&req.url)))
-        })?;
-        if !scheme_allowed(&start, self.allow_local_http) {
-            return Err(FetchError::Other(format!(
-                "{}: only https:// URLs can be fetched",
-                req.url
-            )));
-        }
-        let timeout = if self.timeout.is_zero() {
-            Duration::from_secs(30)
-        } else {
-            self.timeout
-        };
         let limit = if self.max_bytes == 0 {
             MAX_DOCUMENT_BYTES
         } else {
             self.max_bytes
         };
-        // The system trust store, as Go's client uses.
-        let config = ureq::Agent::config_builder()
-            .proxy(None)
-            .max_redirects(0)
-            .max_redirects_will_error(false)
-            .http_status_as_error(false)
-            .user_agent("opencrs-validator/0.1")
-            .tls_config(
-                TlsConfig::builder()
-                    .root_certs(RootCerts::PlatformVerifier)
-                    .build(),
-            )
-            .build();
-        let agent = ureq::Agent::with_parts(
-            config,
-            DefaultConnector::default(),
-            GuardedResolver {
-                allow_local: self.allow_local_http,
-            },
-        );
-        // One deadline for the whole request, redirects included, like
-        // Go's http.Client.Timeout.
-        let deadline = Instant::now() + timeout;
-        let wrap = |url: &Url, why: String| FetchError::Other(format!("Get \"{url}\": {why}"));
-
-        let mut via = vec![start.clone()];
-        let mut current = start;
-        loop {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Err(wrap(
-                    &current,
-                    "context deadline exceeded (Client.Timeout exceeded while awaiting headers)"
-                        .into(),
-                ));
-            }
-            let mut r = agent
-                .get(current.as_str())
-                .config()
-                .timeout_global(Some(remaining))
-                .build()
-                .header("Accept", "application/json");
-            if let Some(t) = &req.token {
-                r = r.header("Authorization", format!("Bearer {t}"));
-            }
-            let mut resp = r.call().map_err(|e| wrap(&current, e.to_string()))?;
-            let code = resp.status().as_u16();
-            if matches!(code, 301 | 302 | 303 | 307 | 308)
-                && let Some(loc) = resp.headers().get("location").and_then(|v| v.to_str().ok())
-            {
-                let next = current
-                    .join(loc)
-                    .map_err(|e| wrap(&current, format!("invalid redirect location: {e}")))?;
-                // Go names the Location as given, not the resolved URL.
-                check_redirect(&next, &via, req, self.allow_local_http)
-                    .map_err(|why| FetchError::Other(format!("Get \"{loc}\": {why}")))?;
-                via.push(next.clone());
-                current = next;
-                continue;
-            }
-            if code != 200 {
-                return Err(FetchError::Status {
-                    url: req.url.clone(),
-                    code,
-                });
-            }
-            let header = |name: &str| {
-                resp.headers()
-                    .get(name)
-                    .and_then(|v| v.to_str().ok())
-                    .unwrap_or("")
-                    .to_string()
-            };
-            let (etag, cache_control, last_modified) = (
-                header("etag"),
-                header("cache-control"),
-                header("last-modified"),
-            );
-            let too_big =
-                || FetchError::Other(format!("{}: larger than the {limit}-byte limit", req.url));
-            let body = match resp
-                .body_mut()
-                .with_config()
-                .limit(limit as u64 + 1)
-                .read_to_vec()
-            {
-                Ok(b) => b,
-                Err(ureq::Error::BodyExceedsLimit(_)) => return Err(too_big()),
-                Err(e) => return Err(wrap(&current, e.to_string())),
-            };
-            if body.len() > limit {
-                return Err(too_big());
-            }
-            return Ok(Response {
-                body,
-                etag,
-                cache_control,
-                last_modified,
+        let r = Http::new(self.allow_local_http, self.timeout).get(req, limit)?;
+        if r.status != 200 {
+            return Err(FetchError::Status {
+                url: req.url.clone(),
+                code: r.status,
             });
         }
+        Ok(Response {
+            body: r.body,
+            etag: r.etag,
+            cache_control: r.cache_control,
+            last_modified: r.last_modified,
+        })
     }
 }
 

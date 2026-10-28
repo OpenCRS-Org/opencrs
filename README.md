@@ -108,6 +108,11 @@ Every [release](https://github.com/OpenCRS-Org/opencrs/releases) has archives fo
 | `opencrs schema FILE…` | Checks documents against the JSON Schemas, plus screens that name a missing format (`CRS-REFERENCE`) and rules inheritance has made impossible (`CRS-RULE-CONFLICT`). |
 | `opencrs resolve SCREENS REF` | Shows what one format or screen requires after inheritance, with minimum text sizes in mm and px and the word limit. With `--strictest`, shows one set of requirements for everything the reference covers, so a single file passes on every screen. |
 | `opencrs fetch DOMAIN` | Reads a publisher's index, fetches its documents, follows delegates, and says which to trust and why. `--output DIR` saves the trusted ones. |
+| `opencrs publisher DOMAIN` | The publisher check: fetches a publisher's specs as `fetch` does, then reports each document's own problems and how each file is served (Cache-Control, ETag, compression, content type). |
+| `opencrs probe FILE…` | Shows what the validator reads from each file: type, pixel size, bytes, SHA-256 and, for video, duration. `--json` prints an array. |
+| `opencrs legibility --near M --far M` | Works out the smallest legible text for a viewing distance. Add `--screen-width-mm` and `--screen-width-px` for pixels, `--dwell` for a word limit. |
+| `opencrs dwell --speed KMH --near M --far M` | Works out what a driver can read of a sign at a speed. `--pack REF` adds a rule pack's limits at that speed. |
+| `opencrs rule-packs [REF]` | Lists the built-in rule packs, or shows one pack's limits. `--json` for the list or the pack document. |
 | `opencrs conformance` | Runs the conformance suite against this validator, or against any other with `--cmd`. |
 | `opencrs completion SHELL` | Prints completions for bash, zsh, fish or PowerShell. |
 | `opencrs version` | Shows the tool, spec and rule pack versions. |
@@ -182,6 +187,10 @@ The checks are written once, in Rust, and every other way of running them uses t
 flowchart TB
     CORE["<b>crates/opencrs</b><br/>schemas · inheritance<br/>file probing · checks<br/>reports · trust"]
     CORE --> CLI["<b>opencrs</b> CLI<br/><i>crates/opencrs-cli</i>"]
+    CORE --> FETCH["SSRF-safe fetching<br/><i>crates/opencrs-fetch</i>"]
+    FETCH --> CLI
+    FETCH --> NPM
+    FETCH --> PY
     CORE --> WASM["<b>opencrs.wasm</b><br/><i>crates/opencrs-wasm</i>"]
     CORE --> NPM["npm binding<br/><i>bindings/npm</i>"]
     CORE --> PY["Python binding<br/><i>bindings/python</i>"]
@@ -215,17 +224,27 @@ Every call, in each place you can run it:
 | What it does | CLI | Go | JavaScript (`js/opencrs.js`) | npm | Python |
 | --- | --- | --- | --- | --- | --- |
 | Check a document against the schemas | `schema` | `Lint` | `lint` | `lint` | `lint` |
-| Read a file's type, pixels, size and duration | inside `check` | `Probe` | `probe` | `probe`, `probeBytes` | `probe`, `probe_bytes` |
+| Read a file's type, pixels, size and duration | `probe` (also inside `check`) | `Probe` | `probe` | `probe`, `probeBytes` | `probe`, `probe_bytes` |
 | Check creative against the screens it targets | `check` | `Check`, `CheckDir` | `check` | `check`, `checkDir` | `check`, `check_dir` |
 | Show a format's or a screen's requirements | `resolve` | `Resolve` | `resolve` | `resolve` | `resolve` |
 | One set of requirements for every screen a reference covers | `resolve --strictest` | `ResolveStrictest` | `resolveStrictest` | `resolveStrictest` | `resolve_strictest` |
-| Fetch a publisher's documents and say which to trust | `fetch` | `FetchPublisher`, `FetchPage`, `SafeClient` | | | |
-| Check a publisher's index and documents, from pages you fetched | | `Publisher` | `publisher` | | |
-| Minimum text size for a viewing distance | | `Legibility` | `legibility` | | |
-| How long a viewer sees a screen | | `Dwell` | `dwell` | | |
-| List the built-in rule packs and their limits | `version` (names and status) | `RulePacks` | `rulePacks` | | |
+| Check a publisher's index and documents, from pages you fetched | | `Publisher` | `publisher` | `publisher` | `publisher` |
+| Fetch a publisher's documents, say which to trust, and run the publisher check | `fetch` (trust), `publisher` (the whole check) | `FetchPublisher`, `FetchPage`, `SafeClient` | | `fetchPublisher`, `discover` | `fetch_publisher`, `discover` |
+| Minimum text size for a viewing distance | `legibility` | `Legibility` | `legibility` | `legibility` | `legibility` |
+| How long a viewer sees a screen | `dwell` | `Dwell` | `dwell` | `dwell` | `dwell` |
+| List the built-in rule packs and their limits | `rule-packs` | `RulePacks` | `rulePacks` | `rulePacks` | `rule_packs` |
 | Tool, spec and rule pack versions | `version` | `Version` | `version` | `version` | `version` |
 | Run the conformance suite | `conformance` | | | | |
+
+The blanks are deliberate, and each is listed with its reason in [`parity/operations.json`](parity/operations.json):
+
+- **Fetching has no JavaScript column.** A browser can't read other sites' files (CORS). Fetch them yourself and pass them to `publisher`, which says which URLs it still needs.
+- **The CLI has no pages-in check.** `opencrs publisher` fetches the pages itself.
+- **The conformance suite runs only in the CLI.** Every other caller is tested against its cases by its own test suite.
+
+That file is the single list of operations, and each caller's tests check their exports against it: adding an operation to it fails Go, JavaScript, npm, Python and CLI tests until each one has the call, or the file says why it can't.
+
+The npm and Python fetchers are the CLI's: one SSRF-safe client (`crates/opencrs-fetch`) that connects only to public addresses, checks them after DNS and on every redirect, uses HTTPS only, ignores proxy settings and caps sizes. `fetchPublisher` and `discover` return Promises and run off the event loop; Python releases the GIL while it waits.
 
 Every Go call also has a `…Context` form that stops when its context is cancelled. `Publisher` returns the URLs it still needs as `Wanted`; they come from the publisher, so fetch them with `SafeClient`, or let `FetchPublisher` run the whole loop.
 
@@ -238,7 +257,8 @@ Every Go call also has a `…Context` form that stops when its context is cancel
 | [`examples/`](examples/) | The spec's complete Harbourline example, verbatim, with the reports the validator writes, and starter files |
 | [`conformance/`](conformance/) | 48 cases (and 9 optional ones for strictest requirements) any validator can run to show it meets Core, Layout or Full ([how to write an adapter](conformance/README.md)) |
 | [`rulepacks/`](rulepacks/) | Regulatory rule packs, embedded in the validator |
-| [`crates/`](crates/) | The Rust library, CLI and WebAssembly module |
+| [`crates/`](crates/) | The Rust library, the CLI, the WebAssembly module, and the fetching the CLI and native bindings share |
+| [`parity/`](parity/) | The list of operations every caller must have, which each caller's tests check |
 | [`bindings/`](bindings/) | npm and Python packages over the Rust library |
 | [`opencrs.go`](opencrs.go) | The Go package |
 

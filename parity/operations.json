@@ -1,0 +1,126 @@
+{
+  "description": "Every operation of the OpenCRS core and where each caller exposes it. Each binding's test suite checks its own exports against this file: every name listed must exist, every public call must be listed (here or under helpers), and a binding with no name for an operation must have an entry in exceptions saying why. To add an operation, add it here with a name for every binding; the suites fail until each binding has it. The README's table of calls is this file in prose.",
+  "bindings": {
+    "cli": "opencrs subcommands, as `name` or `name --flag`",
+    "go": "exported functions of the package at the repo root",
+    "js": "properties of the object js/opencrs.js's load() returns",
+    "npm": "exports of bindings/npm/index.js",
+    "python": "__all__ of bindings/python/python/opencrs"
+  },
+  "operations": {
+    "version": {
+      "summary": "Tool, spec and rule pack versions",
+      "cli": ["version"],
+      "go": ["Version", "VersionContext"],
+      "js": ["version"],
+      "npm": ["version"],
+      "python": ["version"]
+    },
+    "lint": {
+      "summary": "Check a document against the schemas",
+      "cli": ["schema"],
+      "go": ["Lint", "LintContext"],
+      "js": ["lint"],
+      "npm": ["lint"],
+      "python": ["lint"]
+    },
+    "probe": {
+      "summary": "Read a file's type, pixels, size and duration",
+      "note": "Go reads an io.ReaderAt and the browser takes bytes; npm and Python take a path and, separately, bytes; the CLI takes paths.",
+      "cli": ["probe"],
+      "go": ["Probe", "ProbeContext"],
+      "js": ["probe"],
+      "npm": ["probe", "probeBytes"],
+      "python": ["probe", "probe_bytes"]
+    },
+    "check": {
+      "summary": "Check creative against the screens it targets",
+      "note": "Where a binding has two names, the second probes the files named in the manifest under a directory; the browser has no directory and passes the files to check.",
+      "cli": ["check"],
+      "go": ["Check", "CheckContext", "CheckDir", "CheckDirContext"],
+      "js": ["check"],
+      "npm": ["check", "checkDir"],
+      "python": ["check", "check_dir"]
+    },
+    "resolve": {
+      "summary": "Show a format's or a screen's requirements",
+      "cli": ["resolve"],
+      "go": ["Resolve", "ResolveContext"],
+      "js": ["resolve"],
+      "npm": ["resolve"],
+      "python": ["resolve"]
+    },
+    "resolve_strictest": {
+      "summary": "One set of requirements for every screen a reference covers",
+      "cli": ["resolve --strictest"],
+      "go": ["ResolveStrictest", "ResolveStrictestContext"],
+      "js": ["resolveStrictest"],
+      "npm": ["resolveStrictest"],
+      "python": ["resolve_strictest"]
+    },
+    "publisher": {
+      "summary": "Check a publisher's index and documents, from pages already fetched",
+      "cli": null,
+      "go": ["Publisher", "PublisherContext"],
+      "js": ["publisher"],
+      "npm": ["publisher"],
+      "python": ["publisher"]
+    },
+    "fetch_publisher": {
+      "summary": "Fetch a publisher's documents (SSRF-safe), say which to trust, and run the publisher check",
+      "note": "npm and Python also have discover, the trust decisions alone, as `opencrs fetch` prints them; Go's FetchPublisher carries them in its result's Discovery. The CLI's fetch is the trust decisions and its publisher is the whole check.",
+      "cli": ["fetch", "publisher"],
+      "go": ["FetchPublisher"],
+      "js": null,
+      "npm": ["fetchPublisher", "discover"],
+      "python": ["fetch_publisher", "discover"]
+    },
+    "legibility": {
+      "summary": "Minimum text size for a viewing distance",
+      "cli": ["legibility"],
+      "go": ["Legibility", "LegibilityContext"],
+      "js": ["legibility"],
+      "npm": ["legibility"],
+      "python": ["legibility"]
+    },
+    "dwell": {
+      "summary": "What a driver can read of a sign at a speed, and each rule pack's limits",
+      "cli": ["dwell"],
+      "go": ["Dwell", "DwellContext"],
+      "js": ["dwell"],
+      "npm": ["dwell"],
+      "python": ["dwell"]
+    },
+    "rule_packs": {
+      "summary": "List the built-in rule packs and their limits",
+      "cli": ["rule-packs"],
+      "go": ["RulePacks", "RulePacksContext"],
+      "js": ["rulePacks"],
+      "npm": ["rulePacks"],
+      "python": ["rule_packs"]
+    },
+    "conformance": {
+      "summary": "Run the conformance suite against a validator",
+      "cli": ["conformance"],
+      "go": null,
+      "js": null,
+      "npm": null,
+      "python": null
+    }
+  },
+  "exceptions": {
+    "cli.publisher": "The command line has no pages to pass in; its `publisher` command fetches them itself (see fetch_publisher).",
+    "js.fetch_publisher": "A browser can't fetch other sites: CORS stops it reading a publisher's files. Fetch them yourself and pass them to publisher.",
+    "go.conformance": "The conformance suite runs only in the CLI. Go, JavaScript and the native bindings are tested against its cases by their own suites.",
+    "js.conformance": "The conformance suite runs only in the CLI.",
+    "npm.conformance": "The conformance suite runs only in the CLI.",
+    "python.conformance": "The conformance suite runs only in the CLI."
+  },
+  "helpers": {
+    "cli": ["completion"],
+    "go": ["FetchPage", "SafeClient"],
+    "js": ["memoryBytes"],
+    "npm": [],
+    "python": ["OpenCRSError"]
+  }
+}

@@ -39,12 +39,36 @@ macro_rules! exit_conformance {
         "0 conforms, 1 a case failed, 2 usage or read error"
     };
 }
+macro_rules! exit_probe {
+    () => {
+        "0 every file read, 2 usage or read error"
+    };
+}
+macro_rules! exit_calc {
+    () => {
+        "0 worked out, 2 usage error (inputs that make no sense)"
+    };
+}
+macro_rules! exit_rule_packs {
+    () => {
+        "0 shown, 1 no such rule pack, 2 usage error"
+    };
+}
+macro_rules! exit_publisher {
+    () => {
+        "0 no errors, 1 the check found errors, 2 usage error or the index couldn't be used"
+    };
+}
 
 pub const EXIT_CHECK: &str = exit_check!();
 pub const EXIT_SCHEMA: &str = exit_schema!();
 pub const EXIT_RESOLVE: &str = exit_resolve!();
 pub const EXIT_FETCH: &str = exit_fetch!();
 pub const EXIT_CONFORMANCE: &str = exit_conformance!();
+pub const EXIT_PROBE: &str = exit_probe!();
+pub const EXIT_CALC: &str = exit_calc!();
+pub const EXIT_RULE_PACKS: &str = exit_rule_packs!();
+pub const EXIT_PUBLISHER: &str = exit_publisher!();
 
 const STYLES: Styles = Styles::styled()
     .header(AnsiColor::Green.on_default().effects(Effects::BOLD))
@@ -90,6 +114,7 @@ macro_rules! exit_status {
             "opencrs check --spec retail.screens.json creative.json",
             "opencrs fetch harbourline.example",
             "opencrs schema screens.json creative.json",
+            "opencrs probe lunch-portrait.png",
         ),
         "\n\n",
         heading!("Docs:"),
@@ -188,6 +213,113 @@ pub enum Cmd {
         ),
     )]
     Fetch(FetchArgs),
+    #[command(
+        about = "Check a publisher's published specs the way a media owner would",
+        long_about = "Check a publisher's published specs the way a media owner would\n\n\
+            Given a domain, fetches the publisher's index at /.well-known/opencrs.json and \
+            every document it lists, follows delegations, and reports which documents are \
+            trusted, what is wrong with each (schema errors, broken references, rule \
+            conflicts), and how each file is served compared with what the spec asks of \
+            publishers: Cache-Control and ETag headers, compression, a JSON content type. \
+            Where fetch stops at the trust decisions, publisher gives the advice a \
+            publisher needs before announcing its specs.\n\n\
+            The same fetching and limits as fetch: only HTTPS, addresses on private \
+            networks are refused, and no proxy is used. No tokens are sent, so partner \
+            documents are reported as skipped. See the NETWORK section of the man page.",
+        after_help = exit_status!(exit_publisher!()),
+        after_long_help = concat!(
+            examples!(
+                "opencrs publisher harbourline.example",
+                "opencrs publisher --json harbourline.example > publisher.json",
+                "opencrs publisher --now 2026-10-22T12:00:00Z harbourline.example",
+            ),
+            "\n\n",
+            exit_status!(exit_publisher!()),
+        ),
+    )]
+    Publisher(PublisherArgs),
+    #[command(
+        about = "Show what the validator reads from a file",
+        long_about = "Show what the validator reads from a file\n\n\
+            Prints each file's type (from its signature, not its name), pixel size, size in \
+            bytes, SHA-256 and, for video, duration: the values check compares with a \
+            screen's requirements. Only the parts of a large file that are needed are read, \
+            after hashing it. A file that is not a type the validator knows is shown with \
+            type unknown.",
+        after_help = exit_status!(exit_probe!()),
+        after_long_help = concat!(
+            examples!(
+                "opencrs probe lunch-portrait.png",
+                "opencrs probe lunch-portrait.png lunch-portrait-logo-right.png",
+                "opencrs probe --json creative/*.png > probes.json",
+            ),
+            "\n\n",
+            exit_status!(exit_probe!()),
+        ),
+    )]
+    Probe(ProbeArgs),
+    #[command(
+        about = "Work out minimum text sizes for a viewing distance",
+        long_about = "Work out minimum text sizes for a viewing distance\n\n\
+            Works out, as the legibility check does, the smallest text that can be read \
+            from the far end of the viewing range (key text) and the near end (legal \
+            text). Text is taken to be legible at 150 times its height unless --ratio \
+            says otherwise. Give the screen's width in millimetres and pixels to get sizes \
+            in pixels, and a dwell time to get the number of words that can be read in it.",
+        after_help = exit_status!(exit_calc!()),
+        after_long_help = concat!(
+            examples!(
+                "opencrs legibility --near 2 --far 6 --screen-width-mm 940 --screen-width-px 1080",
+                "opencrs legibility --near 2 --far 6 --dwell 4",
+                "opencrs legibility --near 3 --far 10 --ratio 250 --json",
+            ),
+            "\n\n",
+            exit_status!(exit_calc!()),
+        ),
+    )]
+    Legibility(LegibilityArgs),
+    #[command(
+        about = "Work out what a driver can read of a sign at a speed",
+        long_about = "Work out what a driver can read of a sign at a speed\n\n\
+            Works out, as CRS-GLANCE-TEXT does, how long a driver at a speed takes to \
+            cross the viewing range, how much of it is one glance, how many words that \
+            reads, and where reading must start. With --pack, also shows the limits \
+            each built-in rule pack sets at that speed. List the packs with rule-packs.",
+        after_help = exit_status!(exit_calc!()),
+        after_long_help = concat!(
+            examples!(
+                "opencrs dwell --speed 80 --near 20 --far 150",
+                "opencrs dwell --speed 80 --near 20 --far 150 --pack au-nsw-transport-corridor@2017-11",
+                "opencrs dwell --speed 60 --near 20 --far 150 --screen-width-mm 6000 --screen-width-px 1920 --json",
+            ),
+            "\n\n",
+            exit_status!(exit_calc!()),
+        ),
+    )]
+    Dwell(DwellArgs),
+    #[command(
+        name = "rule-packs",
+        about = "List the built-in rule packs, or show one",
+        long_about = "List the built-in rule packs, or show one\n\n\
+            Rule packs encode published regulatory rules, such as a state's roadside \
+            signage guidelines, so a screens.json can name them. Without a reference, \
+            lists the packs built into this tool with their status. With one, \
+            name@version, shows that pack's limits: its creative and playback rules, \
+            and where each comes from. --json gives the pack as the rule-pack document \
+            it is, or the list in the shape the WebAssembly module and the language \
+            bindings give.",
+        after_help = exit_status!(exit_rule_packs!()),
+        after_long_help = concat!(
+            examples!(
+                "opencrs rule-packs",
+                "opencrs rule-packs au-nsw-transport-corridor@2017-11",
+                "opencrs rule-packs --json au-nsw-transport-corridor@2017-11",
+            ),
+            "\n\n",
+            exit_status!(exit_rule_packs!()),
+        ),
+    )]
+    RulePacks(RulePacksArgs),
     #[command(
         about = "Run the conformance suite against a validator",
         long_about = "Run the conformance suite against a validator\n\n\
@@ -362,6 +494,136 @@ pub struct FetchArgs {
             127.0.0.1 and [::1]. Other internal addresses stay refused."
     )]
     pub allow_local_http: bool,
+}
+
+#[derive(Args)]
+pub struct PublisherArgs {
+    /// A publisher's domain
+    #[arg(value_name = "DOMAIN")]
+    pub domain: String,
+    /// Print the result as JSON
+    #[arg(
+        long,
+        long_help = "Print the result as JSON: the same object the language bindings' \
+            publisher check gives, with the trust decisions under `discovery`."
+    )]
+    pub json: bool,
+    /// Check time, RFC 3339 (default: now)
+    #[arg(long, value_name = "TIME", allow_hyphen_values = true)]
+    pub now: Option<String>,
+}
+
+#[derive(Args)]
+pub struct ProbeArgs {
+    /// The files to read
+    #[arg(value_name = "FILE", required = true, num_args = 1..)]
+    pub files: Vec<String>,
+    /// Print the probes as a JSON array
+    #[arg(
+        long,
+        long_help = "Print the probes as a JSON array, one object for each file read, with \
+            the file's name in `file`. The rest of each object is what check compares with \
+            the screens."
+    )]
+    pub json: bool,
+}
+
+#[derive(Args)]
+pub struct LegibilityArgs {
+    /// Nearest viewing distance, metres
+    #[arg(long, value_name = "METRES", required = true, value_parser = parse_float, allow_hyphen_values = true)]
+    pub near: f64,
+    /// Farthest viewing distance, metres
+    #[arg(long, value_name = "METRES", required = true, value_parser = parse_float, allow_hyphen_values = true)]
+    pub far: f64,
+    /// Text is legible at this multiple of its height (default 150)
+    #[arg(long, value_name = "RATIO", value_parser = parse_float, allow_hyphen_values = true)]
+    pub ratio: Option<f64>,
+    /// The screen's width in millimetres, to give sizes in pixels
+    #[arg(
+        long = "screen-width-mm",
+        value_name = "MM",
+        value_parser = parse_float,
+        allow_hyphen_values = true,
+        requires = "screen_width_px"
+    )]
+    pub screen_width_mm: Option<f64>,
+    /// The screen's width in pixels, with --screen-width-mm
+    #[arg(
+        long = "screen-width-px",
+        value_name = "PX",
+        allow_hyphen_values = true,
+        requires = "screen_width_mm"
+    )]
+    pub screen_width_px: Option<i64>,
+    /// Dwell time in seconds, to give a word limit
+    #[arg(long, value_name = "SECONDS", value_parser = parse_float, allow_hyphen_values = true)]
+    pub dwell: Option<f64>,
+    /// Reading rate in words per second (default 2)
+    #[arg(long, value_name = "WORDS", value_parser = parse_float, allow_hyphen_values = true)]
+    pub rate: Option<f64>,
+    /// Print the result as JSON
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args)]
+pub struct DwellArgs {
+    /// The speed, km/h
+    #[arg(long, value_name = "KMH", required = true, value_parser = parse_float, allow_hyphen_values = true)]
+    pub speed: f64,
+    /// Nearest viewing distance, metres
+    #[arg(long, value_name = "METRES", required = true, value_parser = parse_float, allow_hyphen_values = true)]
+    pub near: f64,
+    /// Farthest viewing distance, metres
+    #[arg(long, value_name = "METRES", required = true, value_parser = parse_float, allow_hyphen_values = true)]
+    pub far: f64,
+    /// Text is legible at this multiple of its height (default 150)
+    #[arg(long, value_name = "RATIO", value_parser = parse_float, allow_hyphen_values = true)]
+    pub ratio: Option<f64>,
+    /// Reading rate in words per second (default 2)
+    #[arg(long, value_name = "WORDS", value_parser = parse_float, allow_hyphen_values = true)]
+    pub rate: Option<f64>,
+    /// The screen's width in millimetres, to give sizes in pixels
+    #[arg(
+        long = "screen-width-mm",
+        value_name = "MM",
+        value_parser = parse_float,
+        allow_hyphen_values = true,
+        requires = "screen_width_px"
+    )]
+    pub screen_width_mm: Option<f64>,
+    /// The screen's width in pixels, with --screen-width-mm
+    #[arg(
+        long = "screen-width-px",
+        value_name = "PX",
+        allow_hyphen_values = true,
+        requires = "screen_width_mm"
+    )]
+    pub screen_width_px: Option<i64>,
+    /// Show this built-in rule pack's limits at the speed, repeatable
+    #[arg(
+        long,
+        value_name = "REF",
+        action = ArgAction::Append,
+        allow_hyphen_values = true,
+        long_help = "Show the limits this built-in rule pack, name@version, sets at the \
+            speed. Give it more than once for several packs; rule-packs lists them."
+    )]
+    pub pack: Vec<String>,
+    /// Print the result as JSON
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args)]
+pub struct RulePacksArgs {
+    /// A rule pack, as name@version (default: list them all)
+    #[arg(value_name = "REF", allow_hyphen_values = true)]
+    pub reference: Option<String>,
+    /// Print as JSON
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Args)]

@@ -13,4 +13,10 @@ module.exports = {
   checkDir: native.checkDir,
   resolve: native.resolve,
   resolveStrictest: native.resolveStrictest,
+  legibility: native.legibility,
+  dwell: native.dwell,
+  rulePacks: native.rulePacks,
+  publisher: native.publisher,
+  fetchPublisher: native.fetchPublisher,
+  discover: native.discover,
 };
