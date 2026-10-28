@@ -97,6 +97,13 @@ for (const [name, data] of Object.entries(files)) {
   assert.ok(checker.memoryBytes() <= 256 * 1024 * 1024, `check used ${checker.memoryBytes()} bytes`);
 }
 
+// A request more than the module could hold is refused before it is copied.
+{
+  const huge = new Uint8Array(256 * 1024 * 1024);
+  assert.throws(() => api.lint(huge), /memory limit/);
+  assert.match(JSON.parse(await api.check([huge], "{}", {}, "2026-10-28T00:00:00Z")).error, /memory limit/);
+}
+
 // After a trap the loader discards the instance and the next call works.
 assert.throws(() => api._trap(), WebAssembly.RuntimeError);
 assert.equal(JSON.parse(api.lint(screens)).kind, "screens", "a fresh instance after a trap");

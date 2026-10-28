@@ -11,7 +11,7 @@ use crate::resolve::{ResolveError, parse_ref};
 use crate::rulepack::{RulePacks, builtin_rule_packs};
 use chrono::{DateTime, FixedOffset, SecondsFormat};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt;
 
 /// A report's overall outcome.
@@ -233,9 +233,9 @@ fn stale_check(doc: &Document, now: &DateTime<FixedOffset>) -> Vec<Check> {
 struct Merger {
     index: HashMap<MergeKey, usize>,
     out: Vec<Check>,
-    /// The (finding, screen id) pairs already listed, so a finding that
-    /// covers every screen of a large target stays linear.
-    listed: HashSet<(usize, String)>,
+    table: ScreenTable,
+    /// For each finding, the positions (in `table`) of its screens.
+    at: Vec<Vec<u32>>,
     screens: usize,
 }
 
@@ -244,6 +244,7 @@ type MergeKey = (String, String, String, String, Severity, Option<[i64; 4]>);
 impl Merger {
     fn add(&mut self, checks: Vec<Check>, id: &str) {
         self.screens += 1;
+        let pos = self.table.begin(id);
         for c in checks {
             let key = (
                 c.code.clone(),
@@ -253,30 +254,34 @@ impl Merger {
                 c.severity,
                 c.rect_px.map(|r| r.0),
             );
-            if let Some(&at) = self.index.get(&key) {
-                if !id.is_empty() && self.listed.insert((at, id.to_string())) {
-                    self.out[at].screens.push(id.to_string());
+            let i = match self.index.get(&key) {
+                Some(&i) => i,
+                None => {
+                    self.index.insert(key, self.out.len());
+                    let mut cc = c;
+                    cc.screens = ScreenList::default();
+                    self.out.push(cc);
+                    self.at.push(Vec::new());
+                    self.out.len() - 1
                 }
-                continue;
-            }
-            let mut cc = c;
-            cc.screens = if id.is_empty() {
-                Vec::new()
-            } else {
-                self.listed.insert((self.out.len(), id.to_string()));
-                vec![id.to_string()]
             };
-            self.index.insert(key, self.out.len());
-            self.out.push(cc);
+            // A screen's findings arrive together, so remembering the last
+            // position taken is enough to list it once.
+            if !id.is_empty() && self.at[i].last() != Some(&pos) {
+                self.at[i].push(pos);
+            }
         }
     }
 
     fn finish(self) -> Vec<Check> {
         let mut out = self.out;
-        for c in &mut out {
-            if c.screens.len() == self.screens {
-                c.screens.clear();
-            }
+        for (c, list) in out.iter_mut().zip(self.table.lists(self.at)) {
+            // A finding on every screen of the target lists none.
+            c.screens = if list.len() == self.screens {
+                ScreenList::default()
+            } else {
+                list
+            };
         }
         out
     }

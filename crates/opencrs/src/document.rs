@@ -1,6 +1,8 @@
 //! Checks on a screens.json itself. Port of `crs/document.go`.
 
-use crate::check::{CODE_REFERENCE, CODE_RULE_CONFLICT, CODE_RULE_PACK, Check, Severity};
+use crate::check::{
+    CODE_REFERENCE, CODE_RULE_CONFLICT, CODE_RULE_PACK, Check, ScreenTable, Severity,
+};
 use crate::model::{Document, Network, Screen};
 use crate::rulepack::{builtin_rule_packs, versions_of};
 use serde::Deserialize;
@@ -14,8 +16,11 @@ use std::fmt;
 struct Findings {
     out: Vec<Check>,
     index: HashMap<(String, String), usize>,
-    /// The (finding, screen) pairs already listed.
-    listed: HashSet<(usize, String)>,
+    table: ScreenTable,
+    /// For each finding, the positions (in `table`) of its screens.
+    at: Vec<Vec<u32>>,
+    /// The screen being checked; None outside one or for a screen with no id.
+    cur: Option<u32>,
 }
 
 impl Findings {
@@ -23,30 +28,53 @@ impl Findings {
         Findings {
             out: Vec::new(),
             index: HashMap::new(),
-            listed: HashSet::new(),
+            table: ScreenTable::default(),
+            at: Vec::new(),
+            cur: None,
         }
     }
 
-    fn add(&mut self, code: &str, msg: &str, screen: &str) {
-        self.add_as(code, Severity::Error, msg, screen);
+    /// Starts a screen: findings added until the next call are its.
+    fn begin(&mut self, id: &str) {
+        let pos = self.table.begin(id);
+        self.cur = (!id.is_empty()).then_some(pos);
     }
 
-    fn add_as(&mut self, code: &str, severity: Severity, msg: &str, screen: &str) {
+    /// Findings added from here on are not any screen's.
+    fn end_screen(&mut self) {
+        self.cur = None;
+    }
+
+    fn add(&mut self, code: &str, msg: &str) {
+        self.add_as(code, Severity::Error, msg);
+    }
+
+    fn add_as(&mut self, code: &str, severity: Severity, msg: &str) {
         let key = (code.to_string(), msg.to_string());
-        if let Some(&i) = self.index.get(&key) {
-            let c = &mut self.out[i];
-            if !screen.is_empty() && self.listed.insert((i, screen.to_string())) {
-                c.screens.push(screen.to_string());
+        let i = match self.index.get(&key) {
+            Some(&i) => i,
+            None => {
+                self.index.insert(key, self.out.len());
+                self.out.push(Check::new(code, severity, msg));
+                self.at.push(Vec::new());
+                self.out.len() - 1
             }
-            return;
+        };
+        // A screen's findings arrive together, so one remembered position
+        // is enough to list it once.
+        if let Some(pos) = self.cur
+            && self.at[i].last() != Some(&pos)
+        {
+            self.at[i].push(pos);
         }
-        let mut c = Check::new(code, severity, msg);
-        if !screen.is_empty() {
-            c.screens = vec![screen.to_string()];
-            self.listed.insert((self.out.len(), screen.to_string()));
+    }
+
+    fn finish(self) -> Vec<Check> {
+        let mut out = self.out;
+        for (c, list) in out.iter_mut().zip(self.table.lists(self.at)) {
+            c.screens = list;
         }
-        self.index.insert(key, self.out.len());
-        self.out.push(c);
+        out
     }
 }
 
@@ -67,19 +95,21 @@ pub fn check_document(d: &Document) -> Vec<Check> {
         }
         check_unused_formats(d, n, |id| used.contains(id), &mut f);
     }
-    f.out
+    f.finish()
 }
 
 fn check_screen(d: &Document, n: &Network, s: &Screen, f: &mut Findings) {
+    f.begin(&s.id);
     match d.resolve_screen(n, s) {
-        Err(e) => f.add(CODE_REFERENCE, &e.to_string(), &s.id),
+        Err(e) => f.add(CODE_REFERENCE, &e.to_string()),
         Ok(r) => {
             for msg in &r.rules.conflicts {
-                f.add(CODE_RULE_CONFLICT, msg, &s.id);
+                f.add(CODE_RULE_CONFLICT, msg);
             }
-            unknown_packs(f, &r.rules.rule_packs, &s.id);
+            unknown_packs(f, &r.rules.rule_packs);
         }
     }
+    f.end_screen();
 }
 
 /// Formats no screen uses still carry network and format rules.
@@ -90,9 +120,9 @@ fn check_unused_formats(d: &Document, n: &Network, used: impl Fn(&str) -> bool, 
         }
         let r = d.build(n, fm, None, None);
         for msg in &r.rules.conflicts {
-            f.add(CODE_RULE_CONFLICT, msg, "");
+            f.add(CODE_RULE_CONFLICT, msg);
         }
-        unknown_packs(f, &r.rules.rule_packs, "");
+        unknown_packs(f, &r.rules.rule_packs);
     }
 }
 
@@ -179,12 +209,12 @@ pub fn check_document_text(raw: &str) -> Option<Vec<Check>> {
         }
         check_unused_formats(&d, n, |id| used.contains(id), &mut f);
     }
-    Some(f.out)
+    Some(f.finish())
 }
 
 /// Warns about each referenced rule pack that isn't built in, naming the
 /// versions that are when only the version is wrong.
-fn unknown_packs(f: &mut Findings, refs: &[String], screen: &str) {
+fn unknown_packs(f: &mut Findings, refs: &[String]) {
     let known = builtin_rule_packs();
     for reference in refs {
         if known.contains_key(reference) {
@@ -198,7 +228,7 @@ fn unknown_packs(f: &mut Findings, refs: &[String], screen: &str) {
         if !versions.is_empty() {
             msg += &format!(" (known: {})", versions.join(", "));
         }
-        f.add_as(CODE_RULE_PACK, Severity::Warning, &msg, screen);
+        f.add_as(CODE_RULE_PACK, Severity::Warning, &msg);
     }
 }
 
@@ -253,5 +283,31 @@ mod tests {
         assert!(serde_json::from_str::<Document>(dup).is_err());
         assert_eq!(check_document_text(dup), None);
         assert_eq!(check_document_text("[]"), None);
+    }
+
+    /// Findings list each screen once, in document order, even when ids
+    /// repeat or the findings of many screens interleave.
+    #[test]
+    fn findings_list_screens_once_in_order() {
+        let screens = ["a", "b", "a", "c", "b", "d"];
+        let doc = json!({
+            "opencrs": "0.1", "publisher": "p.example", "updated_at": "2026-01-01T00:00:00Z",
+            "networks": [{
+                "id": "n", "name": "N",
+                "rules": {"rule_packs": ["x@1", "y@1"]},
+                "formats": [{"id": "f", "pixels": [1, 1], "media": {"static": ["image/png"]}}],
+                "screens": screens.iter().map(|i| json!({"id": i, "format": "f"})).collect::<Vec<_>>(),
+            }],
+        });
+        let text = doc.to_string();
+        let d: Document = serde_json::from_str(&text).unwrap();
+        for checks in [check_document(&d), check_document_text(&text).unwrap()] {
+            assert_eq!(checks.len(), 2);
+            for c in &checks {
+                assert_eq!(c.screens, ["a", "b", "c", "d"]);
+            }
+            let out = serde_json::to_string(&checks[0]).unwrap();
+            assert!(out.contains(r#""screens":["a","b","c","d"]"#), "{out}");
+        }
     }
 }

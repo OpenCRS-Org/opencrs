@@ -99,7 +99,7 @@ mod ops {
             ..SchemaOptions::default()
         };
         match lint_document(doc, None, &opt) {
-            Ok(res) => json::to_string(&res).into_bytes(),
+            Ok(res) => json::to_bytes_sized(&res),
             Err(e) => error(e),
         }
     }

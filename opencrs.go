@@ -85,8 +85,19 @@ func (in *instance) fn(name string) (api.Function, error) {
 	return f, nil
 }
 
+// maxRequest is the most a single request may carry. The module could never
+// hold more, and sizes are 32-bit in its ABI.
+const maxRequest = maxMemoryPages * 65536
+
+func errTooLarge(n int) error {
+	return fmt.Errorf("opencrs: a request of %d bytes is more than the module's %d-byte memory limit", n, maxRequest)
+}
+
 // put copies data into a new allocation in module memory.
 func (in *instance) put(data []byte) (ptr uint32, err error) {
+	if len(data) >= maxRequest {
+		return 0, errTooLarge(len(data))
+	}
 	alloc, err := in.fn("opencrs_alloc")
 	if err != nil {
 		return 0, err
@@ -159,6 +170,9 @@ func (in *instance) callDocs(name string, req map[string]any, docs ...[]byte) ([
 		return nil, err
 	}
 	total += len(head)
+	if total >= maxRequest {
+		return nil, errTooLarge(total)
+	}
 	f, err := in.fn(name)
 	if err != nil {
 		return nil, err

@@ -13,6 +13,11 @@
 //
 // Every result is a JSON string: the result, or {"error": "..."}.
 
+// The most one request may carry: the module could never hold more, and its
+// sizes are 32-bit. Matches the Go package's limit.
+const MAX_REQUEST = 256 * 1024 * 1024;
+const tooLarge = (n) => new RangeError(`a request of ${n} bytes is more than the module's ${MAX_REQUEST}-byte memory limit`);
+
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
@@ -59,6 +64,7 @@ export async function load(source) {
   // Linear memory can grow during a call, so take a fresh view every time.
   const view = (ptr, len) => new Uint8Array(exports_().memory.buffer, ptr, len);
   const put = (data) => {
+    if (data.length >= MAX_REQUEST) throw tooLarge(data.length);
     const ptr = exports_().opencrs_alloc(data.length);
     view(ptr, data.length).set(data);
     return ptr;
@@ -90,6 +96,7 @@ export async function load(source) {
       const x = exports_();
       let total = 0;
       for (const p of parts) total += p.length;
+      if (total >= MAX_REQUEST) throw tooLarge(total);
       const ptr = x.opencrs_alloc(total);
       let at = ptr;
       for (const p of parts) {
