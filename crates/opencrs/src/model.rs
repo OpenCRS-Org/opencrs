@@ -4,6 +4,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
+use std::sync::OnceLock;
 
 pub(crate) fn is_false(b: &bool) -> bool {
     !*b
@@ -43,6 +44,43 @@ pub struct Network {
     pub screens: Vec<Screen>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delivery: Option<Delivery>,
+    /// Built on first lookup; see [`Lookup`].
+    #[serde(skip)]
+    pub(crate) lookup: Lookup,
+}
+
+/// Sorted indexes over a network's venues, formats and screens, built the
+/// first time a lookup needs one, so finding an id is a binary search, not a
+/// scan. Each holds positions ordered by id and then position, so of repeated
+/// ids the first still wins, as it does for a scan. It is not part of the
+/// network's value: a clone starts without one, and two networks are equal
+/// whatever they have indexed. A lookup falls back to a scan if the list
+/// has a different length than when the index was built.
+#[derive(Default)]
+pub(crate) struct Lookup {
+    pub(crate) venues: OnceLock<Vec<u32>>,
+    pub(crate) formats: OnceLock<Vec<u32>>,
+    pub(crate) screens: OnceLock<Vec<u32>>,
+    /// Screens by their format.
+    pub(crate) by_format: OnceLock<Vec<u32>>,
+}
+
+impl Clone for Lookup {
+    fn clone(&self) -> Self {
+        Lookup::default()
+    }
+}
+
+impl PartialEq for Lookup {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl fmt::Debug for Lookup {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Lookup")
+    }
 }
 
 /// A centre, airport or station.

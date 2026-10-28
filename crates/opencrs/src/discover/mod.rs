@@ -580,13 +580,26 @@ fn fetch_document(
     d.last_modified = resp.last_modified;
     d.raw = resp.body;
 
-    let head = match serde_json::from_slice::<Value>(&d.raw) {
-        Ok(Value::Null) => Ok(DocHead::default()),
-        Ok(v @ Value::Object(_)) => serde_json::from_value::<DocHead>(v),
-        Ok(_) => Err(<serde_json::Error as serde::de::Error>::custom(
-            "cannot unmarshal into a document",
-        )),
-        Err(err) => Err(err),
+    // Read the head straight from the text when it is an object that
+    // decodes cleanly, so a large document isn't built as a `Value` first.
+    // Anything else (a repeated key, a wrong type, not JSON) takes the
+    // longer route below, which words the problem.
+    let direct = d
+        .raw
+        .iter()
+        .find(|b| !b.is_ascii_whitespace())
+        .filter(|b| **b == b'{')
+        .and_then(|_| serde_json::from_slice::<DocHead>(&d.raw).ok());
+    let head = match direct {
+        Some(h) => Ok(h),
+        None => match serde_json::from_slice::<Value>(&d.raw) {
+            Ok(Value::Null) => Ok(DocHead::default()),
+            Ok(v @ Value::Object(_)) => serde_json::from_value::<DocHead>(v),
+            Ok(_) => Err(<serde_json::Error as serde::de::Error>::custom(
+                "cannot unmarshal into a document",
+            )),
+            Err(err) => Err(err),
+        },
     };
     // A document on another host may be anything, including an internal
     // service's reply: its reasons name where it's wrong, not what it says.

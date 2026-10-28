@@ -26,7 +26,7 @@
 mod ops {
     use chrono::DateTime;
     use opencrs::SPEC_VERSION;
-    use opencrs::batch::{RequirementsView, check_manifest, lint as lint_document};
+    use opencrs::batch::{GroupedViews, RequirementsView, check_manifest, lint as lint_document};
     use opencrs::calc::{self, ScreenWidth};
     use opencrs::json;
     use opencrs::load::{decode_document, decode_manifest};
@@ -83,6 +83,9 @@ mod ops {
             blobs.push(blob);
             rest = tail;
         }
+        if !rest.is_empty() {
+            return Err(bad());
+        }
         Ok(Frame {
             header: parse(head, usage)?,
             blobs,
@@ -116,36 +119,10 @@ mod ops {
         reports: Vec<Report>,
         #[serde(skip_serializing_if = "Vec::is_empty")]
         notes: Vec<String>,
-        /// Each report's target to the screens it covers, for drawing proofs.
-        requirements: BTreeMap<String, Views<'a>>,
-    }
-
-    /// The views of the screens a reference covers, worked out as they are
-    /// written, so a format of hundreds of thousands of screens is never
-    /// held as views.
-    struct Views<'a> {
-        doc: &'a opencrs::model::Document,
-        target: opencrs::resolve::Ref,
-    }
-
-    impl Serialize for Views<'_> {
-        fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
-            use serde::ser::{Error as _, SerializeSeq};
-            let mut seq = ser.serialize_seq(None)?;
-            let mut err = None;
-            let resolved = self.doc.resolve_each(&self.target, |q| {
-                if err.is_none()
-                    && let Err(e) = seq.serialize_element(&q.view())
-                {
-                    err = Some(e);
-                }
-            });
-            match (err, resolved) {
-                (Some(e), _) => Err(e),
-                (None, Err(e)) => Err(S::Error::custom(e)),
-                (None, Ok(())) => seq.end(),
-            }
-        }
+        /// Each report's target to the screens it covers, for drawing proofs:
+        /// entries of `{"screens": [ids], ...requirements}`, one for each
+        /// distinct set of requirements.
+        requirements: BTreeMap<String, GroupedViews<'a>>,
     }
 
     fn try_check(req: Vec<u8>) -> Result<Vec<u8>, Vec<u8>> {
@@ -178,8 +155,11 @@ mod ops {
                 continue;
             };
             // The first document that resolves the target answers for it.
-            if let Some(doc) = docs.iter().find(|d| d.resolve_each(&rf, |_| {}).is_ok()) {
-                requirements.insert(rep.target.clone(), Views { doc, target: rf });
+            if let Some(g) = docs
+                .iter()
+                .find_map(|d| GroupedViews::new(d, rf.clone()).ok())
+            {
+                requirements.insert(rep.target.clone(), g);
             }
         }
         Ok(json::to_bytes_sized(&CheckResult {
@@ -481,6 +461,14 @@ mod ops {
             short.pop();
             assert!(
                 val(check(short))["error"]
+                    .as_str()
+                    .unwrap()
+                    .contains("frame")
+            );
+            let mut long = r;
+            long.push(b' ');
+            assert!(
+                val(check(long))["error"]
                     .as_str()
                     .unwrap()
                     .contains("frame")

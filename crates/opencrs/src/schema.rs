@@ -95,20 +95,70 @@ struct Items {
     screen: Validator,
 }
 
+/// The schemas, parsed and registered once. A validator is built the first
+/// time its kind is checked, so a process (or a fresh module instance) that
+/// lints one kind of document doesn't pay for compiling them all.
 struct Compiled {
-    kinds: Vec<(Kind, Validator)>,
-    items: Items,
+    registry: Registry<'static>,
+    docs: Vec<(&'static str, Value)>,
+    kinds: Vec<(Kind, OnceLock<Result<Validator, String>>)>,
+    items: OnceLock<Result<Items, String>>,
+}
+
+impl Compiled {
+    fn validator(&self, kind: Kind) -> Result<&Validator, Error> {
+        let (_, cell) = self
+            .kinds
+            .iter()
+            .find(|(k, _)| *k == kind)
+            .ok_or_else(|| Error::msg("unknown document kind"))?;
+        cell.get_or_init(|| {
+            let name = format!("{}.schema.json", kind.as_str());
+            let (_, doc) = self
+                .docs
+                .iter()
+                .find(|(n, _)| *n == name)
+                .ok_or("missing schema")?;
+            jsonschema::options()
+                .with_registry(&self.registry)
+                .build(doc)
+                .map_err(|e| e.to_string())
+        })
+        .as_ref()
+        .map_err(|e| Error::Message(format!("loading schemas: {e}")))
+    }
+
+    fn items(&self) -> Result<&Items, Error> {
+        self.items
+            .get_or_init(|| {
+                let item = |def: &str| {
+                    jsonschema::options()
+                        .with_registry(&self.registry)
+                        .build(&serde_json::json!({
+                            "$ref": format!("{BASE_URL}screens.schema.json#/$defs/{def}")
+                        }))
+                        .map_err(|e| e.to_string())
+                };
+                Ok(Items {
+                    venue: item("venue")?,
+                    format: item("format")?,
+                    screen: item("screen")?,
+                })
+            })
+            .as_ref()
+            .map_err(|e| Error::Message(format!("loading schemas: {e}")))
+    }
 }
 
 fn schemas() -> Result<&'static Compiled, Error> {
     static COMPILED: OnceLock<Result<Compiled, String>> = OnceLock::new();
     COMPILED
-        .get_or_init(compile)
+        .get_or_init(register)
         .as_ref()
         .map_err(|e| Error::Message(format!("loading schemas: {e}")))
 }
 
-fn compile() -> Result<Compiled, String> {
+fn register() -> Result<Compiled, String> {
     let mut builder = Registry::new();
     let mut docs = Vec::new();
     for (name, text) in SCHEMA_FILES {
@@ -119,34 +169,11 @@ fn compile() -> Result<Compiled, String> {
         docs.push((name, v));
     }
     let registry = builder.prepare().map_err(|e| e.to_string())?;
-    let mut out = Vec::new();
-    for kind in Kind::ALL {
-        let name = format!("{}.schema.json", kind.as_str());
-        let (_, doc) = docs
-            .iter()
-            .find(|(n, _)| *n == name)
-            .ok_or("missing schema")?;
-        let v = jsonschema::options()
-            .with_registry(&registry)
-            .build(doc)
-            .map_err(|e| e.to_string())?;
-        out.push((kind, v));
-    }
-    let item = |def: &str| {
-        jsonschema::options()
-            .with_registry(&registry)
-            .build(&serde_json::json!({
-                "$ref": format!("{BASE_URL}screens.schema.json#/$defs/{def}")
-            }))
-            .map_err(|e| e.to_string())
-    };
     Ok(Compiled {
-        kinds: out,
-        items: Items {
-            venue: item("venue")?,
-            format: item("format")?,
-            screen: item("screen")?,
-        },
+        registry,
+        docs,
+        kinds: Kind::ALL.iter().map(|&k| (k, OnceLock::new())).collect(),
+        items: OnceLock::new(),
     })
 }
 
@@ -231,14 +258,9 @@ pub fn validate_schema(
     opt: &SchemaOptions,
 ) -> Result<Vec<SchemaError>, Error> {
     let all = schemas()?;
-    let validator = &all
-        .kinds
-        .iter()
-        .find(|(k, _)| *k == kind)
-        .ok_or_else(|| Error::msg("unknown document kind"))?
-        .1;
+    let validator = all.validator(kind)?;
     if kind == Kind::Screens
-        && let Some(errs) = validate_screens_by_item(&all.items, validator, raw)
+        && let Some(errs) = validate_screens_by_item(all.items()?, validator, raw)
     {
         return Ok(errs);
     }
@@ -478,12 +500,7 @@ mod tests {
         let base: Value =
             serde_json::from_slice(&read("examples/harbourline/retail.screens.json")).unwrap();
         let all = schemas().unwrap();
-        let sv = &all
-            .kinds
-            .iter()
-            .find(|(k, _)| *k == Kind::Screens)
-            .unwrap()
-            .1;
+        let sv = all.validator(Kind::Screens).unwrap();
         let whole = |v: &Value| validate_value(sv, v);
         type Edit = Box<dyn Fn(&mut Value)>;
         let edits: Vec<Edit> = vec![
@@ -524,7 +541,7 @@ mod tests {
             let raw = serde_json::to_vec(&v).unwrap();
             let want = whole(&v);
             assert_eq!(
-                validate_screens_by_item(&all.items, sv, &raw),
+                validate_screens_by_item(all.items().unwrap(), sv, &raw),
                 Some(want.clone()),
                 "edit {i}"
             );
@@ -537,7 +554,7 @@ mod tests {
         // Text that isn't a document falls back to the usual path and error.
         for bad in [&b"{"[..], b"[]", b"7", b"{\"networks\":[1,"] {
             assert!(
-                validate_screens_by_item(&all.items, sv, bad).is_none()
+                validate_screens_by_item(all.items().unwrap(), sv, bad).is_none()
                     || serde_json::from_slice::<Value>(bad).is_ok(),
                 "{}",
                 String::from_utf8_lossy(bad)

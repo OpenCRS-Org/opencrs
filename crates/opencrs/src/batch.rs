@@ -8,11 +8,12 @@ use crate::legibility::TextClass;
 use crate::model::{CreativeFile, Document, Insets, Manifest, Media, Region, Segment, Viewing};
 use crate::probe::Probe;
 use crate::report::{Input, Options, Report, ValidateError, validate};
-use crate::resolve::parse_ref;
-use crate::resolve::{Requirements, Rules};
+use crate::resolve::{Ref, Requirements, ResolveError, Rules, parse_ref};
 use crate::schema::{Kind, SchemaError, SchemaOptions, detect_kind, validate_schema};
+use serde::ser::SerializeSeq;
 use serde::{Serialize, Serializer};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
 
 /// Checks every file in a manifest against every target that one of `docs`
@@ -177,6 +178,94 @@ pub fn lint(raw: &[u8], kind: Option<Kind>, opt: &SchemaOptions) -> Result<LintR
     Ok(res)
 }
 
+/// The screens a reference covers, with those whose requirements are the
+/// same apart from their id sharing one entry: `{"screens": [ids], ...the
+/// view}`. A format of tens of thousands of screens usually comes to a few
+/// dozen entries. Entries are in order of the first screen that has them and
+/// list their screens in document order; a format with no screens gives one
+/// entry with no `screens`. Nothing else is lost: every screen's view is its
+/// entry's, with `screen` set to its id.
+///
+/// Built in one pass that keeps only fingerprints and ids, and written in a
+/// second that works out just the entries' views, so memory stays small even
+/// when no two screens are alike.
+pub struct GroupedViews<'a> {
+    doc: &'a Document,
+    target: Ref,
+    /// For each entry, the position of its first screen among the results.
+    firsts: Vec<usize>,
+    screens: Vec<Vec<String>>,
+}
+
+impl<'a> GroupedViews<'a> {
+    /// Groups the screens `target` covers in `doc`, or says why it doesn't
+    /// resolve.
+    pub fn new(doc: &'a Document, target: Ref) -> Result<Self, ResolveError> {
+        let mut seen: HashMap<[u8; 32], usize> = HashMap::new();
+        let mut firsts = Vec::new();
+        let mut screens: Vec<Vec<String>> = Vec::new();
+        let mut at = 0usize;
+        doc.resolve_each(&target, |q| {
+            let mut v = q.view();
+            let id = std::mem::take(&mut v.screen);
+            let print: [u8; 32] =
+                Sha256::digest(serde_json::to_vec(&v).expect("a view is serialisable")).into();
+            let g = *seen.entry(print).or_insert_with(|| {
+                firsts.push(at);
+                screens.push(Vec::new());
+                firsts.len() - 1
+            });
+            if !id.is_empty() {
+                screens[g].push(id);
+            }
+            at += 1;
+        })?;
+        Ok(GroupedViews {
+            doc,
+            target,
+            firsts,
+            screens,
+        })
+    }
+}
+
+#[derive(Serialize)]
+struct Group<'a> {
+    #[serde(skip_serializing_if = "<[String]>::is_empty")]
+    screens: &'a [String],
+    #[serde(flatten)]
+    view: RequirementsView,
+}
+
+impl Serialize for GroupedViews<'_> {
+    fn serialize<S: Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
+        let mut seq = ser.serialize_seq(Some(self.firsts.len()))?;
+        let (mut at, mut next) = (0usize, 0usize);
+        let mut err = None;
+        let resolved = self.doc.resolve_each(&self.target, |q| {
+            if err.is_none() && self.firsts.get(next) == Some(&at) {
+                let mut view = q.view();
+                view.screen.clear();
+                let g = Group {
+                    screens: &self.screens[next],
+                    view,
+                };
+                if let Err(e) = seq.serialize_element(&g) {
+                    err = Some(e);
+                }
+                next += 1;
+            }
+            at += 1;
+        });
+        use serde::ser::Error as _;
+        match (err, resolved) {
+            (Some(e), _) => Err(e),
+            (None, Err(e)) => Err(S::Error::custom(e)),
+            (None, Ok(())) => seq.end(),
+        }
+    }
+}
+
 /// A JSON-friendly summary of one screen's resolved requirements, with
 /// derived minimum text sizes and word limit.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -249,7 +338,65 @@ impl Requirements<'_> {
 mod tests {
     use super::*;
     use crate::check::CODE_REFERENCE;
+    use crate::json;
     use crate::testutil::{harbourline, test_now};
+
+    /// Grouped views expand to exactly the per-screen views, and screens
+    /// that differ only by id share an entry.
+    #[test]
+    fn grouped_views_expand_to_the_per_screen_views() {
+        let mut d = harbourline();
+        let n = &mut d.networks[0];
+        let template = n.screens[1].clone();
+        for i in 0..40 {
+            let mut s = template.clone();
+            s.id = format!("X-{i:02}");
+            if i % 10 == 0 {
+                s.venue = String::new();
+            }
+            n.screens.push(s);
+        }
+        let n = n.clone();
+        d.networks[0] = n;
+        let rf = parse_ref(&format!(
+            "harbourline.example/retail/{}",
+            d.networks[0].screens[1].format
+        ))
+        .unwrap();
+        let g = GroupedViews::new(&d, rf.clone()).unwrap();
+        let grouped: Vec<Value> = serde_json::from_str(&json::to_string(&g)).unwrap();
+        let reqs = d.resolve(&rf).unwrap();
+        assert!(grouped.len() < reqs.len(), "{} entries", grouped.len());
+        let mut expanded: Vec<(String, Value)> = Vec::new();
+        for mut e in grouped {
+            let ids: Vec<String> = e
+                .as_object_mut()
+                .unwrap()
+                .remove("screens")
+                .map_or_else(Vec::new, |v| serde_json::from_value(v).unwrap());
+            for id in ids {
+                expanded.push((id.clone(), e.clone()));
+            }
+        }
+        assert_eq!(expanded.len(), reqs.len());
+        for (id, entry) in expanded {
+            let q = reqs.iter().find(|q| q.screen_id() == id).unwrap();
+            let mut want: Value = serde_json::from_str(&json::to_string(&q.view())).unwrap();
+            want.as_object_mut().unwrap().remove("screen");
+            assert_eq!(entry, want, "{id}");
+        }
+        // A format no screen uses is one entry with no screens.
+        let mut empty = harbourline();
+        empty.networks[0].screens.clear();
+        let rf = parse_ref("harbourline.example/retail/portrait-totem-75").unwrap();
+        let g = GroupedViews::new(&empty, rf).unwrap();
+        let v: Vec<Value> = serde_json::from_str(&json::to_string(&g)).unwrap();
+        assert_eq!(v.len(), 1);
+        assert!(v[0].get("screens").is_none());
+        assert!(
+            GroupedViews::new(&d, parse_ref("harbourline.example/retail/nope").unwrap()).is_err()
+        );
+    }
 
     fn example(rel: &str) -> Vec<u8> {
         let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

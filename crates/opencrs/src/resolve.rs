@@ -187,7 +187,7 @@ impl Document {
             ))
         })?;
         let mut any = false;
-        for s in n.screens.iter().filter(|s| s.format == f.id) {
+        for s in n.screens_of(&f.id) {
             each(self.resolve_screen(n, s)?);
             any = true;
         }
@@ -287,17 +287,76 @@ impl Document {
     }
 }
 
+/// Positions of `items` sorted by `key`, then by position.
+fn sorted_by<T, K: Ord + ?Sized>(items: &[T], key: impl Fn(&T) -> &K) -> Vec<u32> {
+    let mut at: Vec<u32> = (0..items.len() as u32).collect();
+    at.sort_unstable_by(|&a, &b| {
+        key(&items[a as usize])
+            .cmp(key(&items[b as usize]))
+            .then(a.cmp(&b))
+    });
+    at
+}
+
+/// The positions in `sorted` (an index from [`sorted_by`] over `items`)
+/// whose key is `want`, in position order. Falls back to a scan if the index
+/// no longer fits the list.
+fn matching<'a: 'w, 'w, T>(
+    items: &'a [T],
+    sorted: &'a [u32],
+    want: &'w str,
+    key: impl Fn(&T) -> &str + Copy + 'w,
+) -> Box<dyn Iterator<Item = &'a T> + 'w> {
+    let get = |i: u32| items.get(i as usize).map(key);
+    let fits = sorted.len() == items.len()
+        && sorted.first().is_none_or(|&i| get(i).is_some())
+        && sorted.last().is_none_or(|&i| get(i).is_some());
+    if !fits {
+        return Box::new(items.iter().filter(move |t| key(t) == want));
+    }
+    let lo = sorted.partition_point(|&i| get(i).is_some_and(|k| k < want));
+    let hi = lo + sorted[lo..].partition_point(|&i| get(i) == Some(want));
+    Box::new(sorted[lo..hi].iter().map(move |&i| &items[i as usize]))
+}
+
 impl Network {
-    pub(crate) fn screen(&self, id: &str) -> Option<&Screen> {
-        self.screens.iter().find(|s| s.id == id)
+    pub(crate) fn screen<'a>(&'a self, id: &str) -> Option<&'a Screen> {
+        let ix = self
+            .lookup
+            .screens
+            .get_or_init(|| sorted_by(&self.screens, |s| &s.id));
+        matching(&self.screens, ix, id, |s| s.id.as_str()).next()
     }
 
-    pub(crate) fn format(&self, id: &str) -> Option<&Format> {
-        self.formats.iter().find(|f| f.id == id)
+    pub(crate) fn format<'a>(&'a self, id: &str) -> Option<&'a Format> {
+        let ix = self
+            .lookup
+            .formats
+            .get_or_init(|| sorted_by(&self.formats, |f| &f.id));
+        matching(&self.formats, ix, id, |f| f.id.as_str()).next()
     }
 
-    pub(crate) fn venue(&self, id: &str) -> Option<&Venue> {
-        self.venues.iter().find(|v| v.id == id)
+    pub(crate) fn venue<'a>(&'a self, id: &str) -> Option<&'a Venue> {
+        let ix = self
+            .lookup
+            .venues
+            .get_or_init(|| sorted_by(&self.venues, |v| &v.id));
+        matching(&self.venues, ix, id, |v| v.id.as_str()).next()
+    }
+
+    /// The screens using a format, in document order.
+    pub(crate) fn screens_of<'a, 'w>(
+        &'a self,
+        format: &'w str,
+    ) -> impl Iterator<Item = &'a Screen> + 'w
+    where
+        'a: 'w,
+    {
+        let ix = self
+            .lookup
+            .by_format
+            .get_or_init(|| sorted_by(&self.screens, |s| &s.format));
+        matching(&self.screens, ix, format, |s| s.format.as_str())
     }
 }
 
@@ -439,9 +498,23 @@ impl Rules {
             self.playback.max_transition_s =
                 smaller(self.playback.max_transition_s, p.max_transition_s);
         }
-        for p in &rs.rule_packs {
-            if !self.rule_packs.contains(p) {
-                self.rule_packs.push(p.clone());
+        // A set once the lists are long: a network naming many packs is
+        // merged into every screen under it.
+        if rs.rule_packs.len() > 8 {
+            let mut have: std::collections::HashSet<&str> =
+                self.rule_packs.iter().map(String::as_str).collect();
+            let new: Vec<String> = rs
+                .rule_packs
+                .iter()
+                .filter(|p| have.insert(p.as_str()))
+                .cloned()
+                .collect();
+            self.rule_packs.extend(new);
+        } else {
+            for p in &rs.rule_packs {
+                if !self.rule_packs.contains(p) {
+                    self.rule_packs.push(p.clone());
+                }
             }
         }
         if !rs.notes.is_empty() {
@@ -939,5 +1012,76 @@ mod tests {
         let _ = intersect(big, big);
         let r = intersect(Rect([0, 0, 10, 10]), Rect([5, 5, 10, 10]));
         assert_eq!(r.0, [5, 5, 5, 5]);
+    }
+
+    /// Lookups by id are indexed: tens of thousands of venues, formats and
+    /// screens resolve at once, and of repeated ids the first still wins.
+    #[test]
+    fn lookups_scale_and_the_first_repeated_id_wins() {
+        const N: usize = 50_000;
+        let format = |id: String, w: i64| Format {
+            id,
+            fields: FormatFields {
+                pixels: Some([w, 10]),
+                ..Default::default()
+            },
+        };
+        let mut formats: Vec<Format> = (0..N).map(|i| format(format!("f-{i}"), 1)).collect();
+        formats.push(format("f-7".into(), 2));
+        let mut venues: Vec<Venue> = (0..N)
+            .map(|i| Venue {
+                id: format!("v-{i}"),
+                name: "first".into(),
+                ..Default::default()
+            })
+            .collect();
+        venues.push(Venue {
+            id: "v-7".into(),
+            name: "second".into(),
+            ..Default::default()
+        });
+        let mut screens: Vec<Screen> = (0..N)
+            .map(|i| Screen {
+                id: format!("s-{}", i % (N - 1)),
+                format: format!("f-{}", N - 1 - i),
+                venue: format!("v-{}", N - 1 - i),
+                ..Default::default()
+            })
+            .collect();
+        screens.push(Screen {
+            id: "s-0".into(),
+            format: "f-3".into(),
+            ..Default::default()
+        });
+        let d = Document {
+            publisher: "p.example".into(),
+            networks: vec![Network {
+                id: "n".into(),
+                formats,
+                venues,
+                screens,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let n = &d.networks[0];
+        assert_eq!(n.format("f-7").unwrap().fields.pixels, Some([1, 10]));
+        assert_eq!(n.venue("v-7").unwrap().name, "first");
+        assert_eq!(n.format("nope").map(|f| &f.id), None);
+        assert_eq!(n.screen("s-0").unwrap().format, format!("f-{}", N - 1));
+        assert_eq!(n.screens_of("f-3").count(), 2);
+        assert_eq!(n.screens_of("f-3").next().unwrap().id, "s-49996");
+        let start = std::time::Instant::now();
+        assert!(check_document(&d).is_empty());
+        assert!(start.elapsed().as_secs() < 30, "{:?}", start.elapsed());
+        // A clone, or an edit that changes a list's length, is still right.
+        let mut c = n.clone();
+        c.venues.truncate(5);
+        assert!(c.venue("v-7").is_none());
+        assert_eq!(&c, &c.clone());
+        let mut e = n.clone();
+        assert!(e.venue("v-1").is_some());
+        e.venues.truncate(1);
+        assert!(e.venue("v-1").is_none());
     }
 }

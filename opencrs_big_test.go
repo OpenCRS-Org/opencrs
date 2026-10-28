@@ -82,8 +82,14 @@ func TestLintAndCheckLargeDocument(t *testing.T) {
 	if len(res.Reports) != 2 {
 		t.Fatalf("got %d reports, want 2", len(res.Reports))
 	}
-	if n := len(res.Requirements["big.example/net/fmt-0"]); n != 190000 {
-		t.Fatalf("format target covers %d screens, want 190000", n)
+	groups := res.Requirements["big.example/net/fmt-0"]
+	total := 0
+	for _, g := range groups {
+		total += len(g.Screens)
+	}
+	// Screens differ only by venue, so there is an entry for each.
+	if total != 190000 || len(groups) != 500 {
+		t.Fatalf("format target has %d entries covering %d screens, want 500 covering 190000", len(groups), total)
 	}
 	if took := time.Since(start); took > 2*time.Minute {
 		t.Errorf("check took %v", took)

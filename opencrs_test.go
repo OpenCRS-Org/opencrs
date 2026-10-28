@@ -197,6 +197,17 @@ func TestCheckRequirementsPerTarget(t *testing.T) {
 			t.Errorf("no requirements for %s", r.Target)
 		}
 	}
+	// The two totems differ in venue view and viewing, so each has an entry.
+	var got [][]string
+	for _, g := range res.Requirements["harbourline.example/retail/portrait-totem-75"] {
+		got = append(got, g.Screens)
+		if g.Screen != "" || len(g.Expand()) != len(g.Screens) {
+			t.Errorf("group %+v", g)
+		}
+	}
+	if !reflect.DeepEqual(got, [][]string{{"HC-L1-001"}, {"HC-L1-002"}}) {
+		t.Errorf("groups = %v", got)
+	}
 }
 
 func TestResolve(t *testing.T) {

@@ -55,14 +55,38 @@ func load() (wazero.Runtime, wazero.CompiledModule, error) {
 	return runtime_, compiled, loadErr
 }
 
-// instance is one fresh module instance. It is not safe for concurrent use;
-// each public call makes its own.
+// instance is one module instance. It is not safe for concurrent use; each
+// public call takes its own, from idle ones kept for reuse when there are any.
 type instance struct {
 	ctx context.Context
 	mod api.Module
+	// dirty is set when a call failed, which can leave the module holding
+	// memory or a probe session; such an instance is closed, not reused.
+	dirty bool
 }
 
+// Setting up a fresh instance costs most of a small call (the module builds
+// its schema validators on first use), so a few idle instances are kept. An
+// instance that grew past idleMemory pages, or failed, is closed instead.
+const (
+	maxIdle    = 2
+	idleMemory = 256 // 16 MiB
+)
+
+var (
+	idleMu sync.Mutex
+	idle   []*instance
+)
+
 func newInstance() (*instance, error) {
+	idleMu.Lock()
+	if n := len(idle); n > 0 {
+		in := idle[n-1]
+		idle = idle[:n-1]
+		idleMu.Unlock()
+		return in, nil
+	}
+	idleMu.Unlock()
 	rt, cm, err := load()
 	if err != nil {
 		return nil, fmt.Errorf("opencrs: loading the module: %w", err)
@@ -75,7 +99,20 @@ func newInstance() (*instance, error) {
 	return &instance{ctx: ctx, mod: mod}, nil
 }
 
-func (in *instance) close() { _ = in.mod.Close(in.ctx) }
+// close ends a call: the instance goes back to be reused if it is in a clean
+// state and small, and is closed otherwise.
+func (in *instance) close() {
+	if !in.dirty && in.mod.Memory().Size() <= idleMemory*65536 {
+		idleMu.Lock()
+		if len(idle) < maxIdle {
+			idle = append(idle, in)
+			idleMu.Unlock()
+			return
+		}
+		idleMu.Unlock()
+	}
+	_ = in.mod.Close(in.ctx)
+}
 
 func (in *instance) fn(name string) (api.Function, error) {
 	f := in.mod.ExportedFunction(name)
@@ -246,6 +283,7 @@ func runWith(out any, call func(*instance) ([]byte, error)) error {
 	defer in.close()
 	resp, err := call(in)
 	if err != nil {
+		in.dirty = true
 		return err
 	}
 	return decode(resp, out)
@@ -293,7 +331,11 @@ func Probe(r io.ReaderAt, size int64) (*ProbeResult, error) {
 		return nil, err
 	}
 	defer in.close()
-	return probeOn(in, r, size, hex.EncodeToString(h.Sum(nil)))
+	res, err := probeOn(in, r, size, hex.EncodeToString(h.Sum(nil)))
+	if err != nil {
+		in.dirty = true // a session may be left open
+	}
+	return res, err
 }
 
 type probeStep struct {

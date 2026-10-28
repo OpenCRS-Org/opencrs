@@ -94,7 +94,11 @@ for (const [name, data] of Object.entries(files)) {
   const started = Date.now();
   const checkBig = JSON.parse(await checker.check([big], manifest, {}, "2026-10-28T00:00:00Z"));
   assert.ok(!checkBig.error, checkBig.error);
-  assert.equal(checkBig.requirements["big.example/net/fmt-0"].length, 190000);
+  // Screens that differ only by id share an entry; these differ by venue.
+  const groups = checkBig.requirements["big.example/net/fmt-0"];
+  assert.equal(groups.length, 500);
+  assert.equal(groups.reduce((n, g) => n + g.screens.length, 0), 190000);
+  assert.ok(JSON.stringify(checkBig.requirements).length < 8 * 1024 * 1024, "the answer should be compact");
   assert.ok(Date.now() - started < 60_000, `check took ${Date.now() - started} ms`);
   assert.ok(checker.memoryBytes() <= 256 * 1024 * 1024, `check used ${checker.memoryBytes()} bytes`);
 }
@@ -132,7 +136,9 @@ if (CHECK_PENDING) {
   const got = check.reports.map((r) => ({ ...r }));
   for (const r of [...got, ...expected]) delete r.validator;
   assert.deepEqual(got, expected, "browser and CLI reports differ");
-  assert.equal(check.requirements["harbourline.example/retail/portrait-totem-75"].length, 2);
+  const totem = check.requirements["harbourline.example/retail/portrait-totem-75"];
+  assert.deepEqual(totem.map((g) => g.screens), [["HC-L1-001"], ["HC-L1-002"]]);
+  assert.equal(totem[0].screen, undefined, "a group names its screens in `screens`");
   assert.ok(Array.isArray(resolved) && resolved.length === 2);
 }
 
