@@ -9,7 +9,7 @@ use crate::model::{CreativeFile, Document, Insets, Manifest, Media, Region, Segm
 use crate::probe::Probe;
 use crate::report::{Input, Options, Report, ValidateError, validate};
 use crate::resolve::{Ref, Requirements, ResolveError, Rules, parse_ref};
-use crate::schema::{Kind, SchemaError, SchemaOptions, detect_kind, validate_schema};
+use crate::schema::{Kind, SchemaError, SchemaOptions};
 use serde::ser::SerializeSeq;
 use serde::{Serialize, Serializer};
 use serde_json::{Value, json};
@@ -171,11 +171,7 @@ pub fn lint(raw: &[u8], kind: Option<Kind>, opt: &SchemaOptions) -> Result<LintR
 }
 
 fn lint_within(raw: &[u8], kind: Option<Kind>, opt: &SchemaOptions) -> Result<LintResult, Error> {
-    let kind = match kind {
-        Some(k) => k,
-        None => detect_kind(raw)?,
-    };
-    let errs = validate_schema(kind, raw, opt)?;
+    let (kind, errs) = crate::schema::validate_detecting(kind, raw, opt)?;
     let mut res = LintResult {
         kind,
         schema_errors: errs,
@@ -212,7 +208,7 @@ pub struct GroupedViews<'a> {
     target: Ref,
     /// For each entry, the position of its first screen among the results.
     firsts: Vec<usize>,
-    screens: Vec<Vec<String>>,
+    screens: Vec<Vec<&'a str>>,
 }
 
 impl<'a> GroupedViews<'a> {
@@ -221,25 +217,32 @@ impl<'a> GroupedViews<'a> {
     pub fn new(doc: &'a Document, target: Ref) -> Result<Self, ResolveError> {
         let mut seen: HashMap<[u8; 32], usize> = HashMap::new();
         let mut firsts = Vec::new();
-        let mut screens: Vec<Vec<String>> = Vec::new();
+        let mut screens: Vec<Vec<&'a str>> = Vec::new();
         let mut at = 0usize;
-        let mut listed: HashSet<String> = HashSet::new();
-        let mut by_key: HashMap<[u8; 32], usize> = HashMap::new();
+        let mut listed: HashSet<&'a str> = HashSet::new();
+        let mut by_key: HashMap<Vec<u8>, usize> = HashMap::new();
+        let mut key = Vec::new();
         doc.resolve_each(&target, |q| {
-            let has_screen = q.screen.is_some();
-            let id = q.screen_id().to_string();
+            // Once the budget is spent, resolve_each says so when it is done.
+            if crate::budget::tripped() {
+                return;
+            }
+            let screen = q.screen.map(|s| s.id.as_str());
             // A screen is listed once, by id, as a lookup by id finds one;
             // a screen with an empty id is listed (as "") like any other.
-            if has_screen && !listed.insert(id.clone()) {
+            if let Some(id) = screen
+                && !listed.insert(id)
+            {
                 at += 1;
                 return;
             }
             // Screens with the same requirements have the same view, which
             // is worked out once, not for each of them.
-            let key = q.fingerprint();
-            let g = match key.and_then(|k| by_key.get(&k).copied()) {
-                Some(g) => g,
-                None => {
+            key.clear();
+            let keyed = q.key(&mut key);
+            let g = match by_key.get(key.as_slice()) {
+                Some(&g) if keyed => g,
+                _ => {
                     let mut v = q.view();
                     v.screen.clear();
                     let print: [u8; 32] =
@@ -250,13 +253,13 @@ impl<'a> GroupedViews<'a> {
                         screens.push(Vec::new());
                         firsts.len() - 1
                     });
-                    if let Some(k) = key {
-                        by_key.insert(k, g);
+                    if keyed {
+                        by_key.insert(key.clone(), g);
                     }
                     g
                 }
             };
-            if has_screen {
+            if let Some(id) = screen {
                 screens[g].push(id);
             }
             at += 1;
@@ -272,8 +275,8 @@ impl<'a> GroupedViews<'a> {
 
 #[derive(Serialize)]
 struct Group<'a> {
-    #[serde(skip_serializing_if = "<[String]>::is_empty")]
-    screens: &'a [String],
+    #[serde(skip_serializing_if = "<[&str]>::is_empty")]
+    screens: &'a [&'a str],
     #[serde(flatten)]
     view: RequirementsView,
 }
@@ -378,10 +381,10 @@ impl Requirements<'_> {
             venue: self.venue.map_or_else(String::new, |v| v.id.clone()),
             pixels: self.pixels,
             physical_mm: self.physical_mm,
-            media: self.media.clone(),
+            media: self.media.clone().into_owned(),
             safe_area: self.safe_area,
-            blocked_regions: self.blocked_regions.clone(),
-            segments: self.segments.clone(),
+            blocked_regions: self.blocked_regions.to_vec(),
+            segments: self.segments.to_vec(),
             viewing: self.screen.and_then(|s| s.viewing.clone()),
             rules: self.rules.clone(),
             derived,
@@ -479,6 +482,60 @@ mod tests {
         assert!(
             GroupedViews::new(&d, parse_ref("harbourline.example/retail/nope").unwrap()).is_err()
         );
+    }
+
+    /// Screens whose views differ get their own entries, though their
+    /// screen fields look alike once serialised (an override of `[]` against
+    /// none) or their own rules are the same (a conflict names the screen).
+    #[test]
+    fn grouped_views_keep_apart_screens_whose_views_differ() {
+        let entries = |d: &Document| -> Vec<Value> {
+            let n = &d.networks[0];
+            let rf = parse_ref(&format!(
+                "harbourline.example/retail/{}",
+                n.screens[0].format
+            ))
+            .unwrap();
+            let g = GroupedViews::new(d, rf).unwrap();
+            serde_json::from_str(&json::to_string(&g)).unwrap()
+        };
+        let mut d = harbourline();
+        let n = &mut d.networks[0];
+        let mut a = n.screens[0].clone();
+        a.id = "A".into();
+        a.overrides = Some(Box::new(
+            serde_json::from_str(r#"{"media":{"static":[]}}"#).unwrap(),
+        ));
+        let mut b = a.clone();
+        b.id = "B".into();
+        b.overrides = Some(Box::new(serde_json::from_str(r#"{"media":{}}"#).unwrap()));
+        n.screens = vec![a, b];
+        let v = entries(&d);
+        assert_eq!(v.len(), 2, "{v:?}");
+        assert!(v[0]["media"].get("static").is_none(), "{v:?}");
+        assert_eq!(v[1]["media"]["static"], json!(["image/jpeg", "image/png"]));
+
+        let mut d = harbourline();
+        d.networks[0].rules.as_mut().unwrap().required_elements[0].within_rect_px =
+            Some(crate::model::Rect([0, 1600, 1080, 320]));
+        let n = &mut d.networks[0];
+        let mut a = n.screens[0].clone();
+        a.id = "A".into();
+        a.rules = Some(Box::new(
+            serde_json::from_value(json!({"required_elements": [
+                {"role": "legal", "when": "offer", "within_rect_px": [0, 0, 1080, 300]}]}))
+            .unwrap(),
+        ));
+        let mut b = a.clone();
+        b.id = "B".into();
+        n.screens = vec![a, b];
+        let v = entries(&d);
+        assert_eq!(v.len(), 2, "{v:?}");
+        for (e, id) in v.iter().zip(["A", "B"]) {
+            assert_eq!(e["screens"], json!([id]));
+            let c = e["rules"]["conflicts"][0].as_str().unwrap();
+            assert!(c.starts_with(&format!("screen {id} restates")), "{c}");
+        }
     }
 
     fn example(rel: &str) -> Vec<u8> {

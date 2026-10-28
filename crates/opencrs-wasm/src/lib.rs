@@ -211,12 +211,15 @@ mod ops {
         };
         drop(req);
         let rf = parse_ref(&reference).map_err(error)?;
-        let views: Vec<RequirementsView> = d
-            .resolve(&rf)
-            .map_err(error)?
-            .iter()
-            .map(|q| q.view())
-            .collect();
+        // Views are built as the screens are resolved, and no more once the
+        // budget is spent: resolve_each then says why.
+        let mut views: Vec<RequirementsView> = Vec::new();
+        d.resolve_each(&rf, |q| {
+            if !opencrs::budget::tripped() {
+                views.push(q.view());
+            }
+        })
+        .map_err(error)?;
         if let Some(why) = opencrs::budget::explain(Some(&d)) {
             return Err(error(format!(
                 "{}: {why}",

@@ -186,6 +186,137 @@ fn linear_shapes_stay_inside_the_budget() {
     linear("a few targets", &check_run(&raw, &targets));
 }
 
+fn resolve_run(raw: &[u8], target: &str) -> Run {
+    let t = Instant::now();
+    let d = decode_document(raw).unwrap();
+    let rf = parse_ref(target).unwrap();
+    // As the module's resolve does: a view for each screen as it comes,
+    // none once the budget is spent, then the budget is asked why.
+    let (why, b) = budget::measure(raw.len(), || {
+        let mut views = 0usize;
+        match d.resolve_each(&rf, |q| {
+            if !budget::tripped() {
+                q.view();
+                views += 1;
+            }
+        }) {
+            Err(e) => Some(e.to_string()),
+            Ok(()) => budget::explain(Some(&d)),
+        }
+    });
+    Run {
+        tripped: why.into_iter().collect(),
+        used: b.used(),
+        limit: b.limit(),
+        secs: t.elapsed().as_secs_f64(),
+    }
+}
+
+/// A format's lists are not copied for each of its screens: a format of
+/// many blocked regions on many screens is linear to lint, check and
+/// resolve, and a screen whose overrides change the regions pays for the
+/// rebuilt list.
+#[test]
+fn a_format_with_many_regions_and_many_screens_stays_linear() {
+    let mut v = base();
+    let fmt = v["networks"][0]["screens"][0]["format"].clone();
+    let regions: Vec<Value> = (0..20_000)
+        .map(|i| json!({"name": format!("r{i}"), "rect_px": [0, 0, 1, 1]}))
+        .collect();
+    v["networks"][0]["formats"][0]["blocked_regions"] = regions.into();
+    v["networks"][0]["screens"] = (0..20_000)
+        .map(|i| json!({"id": format!("s{i}"), "format": fmt}))
+        .collect();
+    let raw = serde_json::to_vec(&v).unwrap();
+    linear("regions, lint", &lint_run(&raw));
+    linear("regions, check", &check_run(&raw, &[format_target()]));
+    // A view for each screen lists the regions again: that answer is
+    // 20,000 times the document, and is stopped.
+    let r = resolve_run(&raw, &format_target());
+    assert!(!r.tripped.is_empty(), "used {} of {}", r.used, r.limit);
+    assert!(r.tripped[0].contains("screen views"), "{}", r.tripped[0]);
+    assert!(r.secs < 20.0, "stopped after {:.1}s", r.secs);
+    // Each screen overriding one region has the list rebuilt for it:
+    // 400 million region copies for a 2 MB document, which is stopped and
+    // named.
+    for s in v["networks"][0]["screens"].as_array_mut().unwrap() {
+        s["overrides"] = json!({"blocked_regions": [{"name": "own", "rect_px": [1, 1, 1, 1]}]});
+    }
+    let raw = serde_json::to_vec(&v).unwrap();
+    let r = lint_run(&raw);
+    assert!(!r.tripped.is_empty(), "used {} of {}", r.used, r.limit);
+    assert!(r.tripped[0].contains("blocked regions"), "{}", r.tripped[0]);
+    assert!(
+        r.tripped[0].contains("/networks/0/formats/0"),
+        "{}",
+        r.tripped[0]
+    );
+    assert!(r.secs < 20.0, "stopped after {:.1}s", r.secs);
+}
+
+/// A screen restating one element gets its own copy of the inherited list
+/// to put it in: many such screens under a long list are stopped, and the
+/// cost is named for the list.
+#[test]
+fn screens_restating_a_long_list_trip_the_guard() {
+    let mut v: Value = serde_json::from_slice(&doc(
+        json!({"required_elements": elements(3000)}),
+        20_000,
+        false,
+    ))
+    .unwrap();
+    for s in v["networks"][0]["screens"].as_array_mut().unwrap() {
+        s["rules"] = json!({"required_elements": [{"role": "own"}]});
+    }
+    let raw = serde_json::to_vec(&v).unwrap();
+    let r = lint_run(&raw);
+    assert!(!r.tripped.is_empty(), "used {} of {}", r.used, r.limit);
+    assert!(
+        r.tripped[0].contains("3,000 required elements"),
+        "{}",
+        r.tripped[0]
+    );
+    assert!(r.secs < 20.0, "stopped after {:.1}s", r.secs);
+    let r = check_run(&raw, &[format_target()]);
+    assert!(!r.tripped.is_empty(), "used {} of {}", r.used, r.limit);
+    assert!(r.secs < 20.0, "stopped after {:.1}s", r.secs);
+}
+
+/// A format whose rules conflict with the network's on many elements has
+/// those conflicts reported once, and its screens don't each go through
+/// them: the shape is linear.
+#[test]
+fn a_format_with_many_conflicts_and_many_screens_stays_linear() {
+    let el = |i: usize, rect: [i64; 4]| json!({"role": format!("r{i}"), "within_rect_px": rect});
+    let net: Vec<Value> = (0..2000).map(|i| el(i, [0, 0, 10, 10])).collect();
+    let fmt: Vec<Value> = (0..2000).map(|i| el(i, [20, 20, 10, 10])).collect();
+    let mut v: Value =
+        serde_json::from_slice(&doc(json!({"required_elements": net}), 20_000, false)).unwrap();
+    v["networks"][0]["formats"][0]["rules"] = json!({"required_elements": fmt});
+    let raw = serde_json::to_vec(&v).unwrap();
+    let t = Instant::now();
+    let opt = SchemaOptions::default();
+    let (res, b) = budget::measure(raw.len(), || lint(&raw, None, &opt).unwrap());
+    let conflicts = res
+        .document_checks
+        .iter()
+        .filter(|c| c.code == "CRS-RULE-CONFLICT")
+        .count();
+    assert_eq!(conflicts, 2000, "{:?}", &res.document_checks[..3]);
+    assert!(
+        res.document_checks
+            .iter()
+            .all(|c| c.code != CODE_TOO_COMPLEX && c.screens.is_empty()),
+        "{:?}",
+        res.document_checks
+            .iter()
+            .find(|c| c.code == CODE_TOO_COMPLEX)
+    );
+    assert!(b.used() * 4 < b.limit(), "{} of {}", b.used(), b.limit());
+    assert!(t.elapsed().as_secs_f64() < 20.0, "{:?}", t.elapsed());
+    linear("conflicts, check", &check_run(&raw, &[format_target()]));
+}
+
 #[test]
 fn rule_items_checked_for_many_different_screens_trip_the_guard() {
     // 2,000 required elements, 20,000 screens that each need their own check:

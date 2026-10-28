@@ -27,5 +27,10 @@ pub(crate) fn decode<T: serde::de::DeserializeOwned>(kind: Kind, raw: &[u8]) -> 
             lines.join("\n")
         )));
     }
-    Ok(serde_json::from_slice(raw)?)
+    // Text that is UTF-8 throughout (checked once, quickly) is read as
+    // text, so each string in it isn't checked again.
+    Ok(match std::str::from_utf8(raw) {
+        Ok(text) => serde_json::from_str(text)?,
+        Err(_) => serde_json::from_slice(raw)?,
+    })
 }

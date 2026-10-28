@@ -176,15 +176,17 @@ fn validate_within(
     // target of hundreds of thousands of screens costs by what is different
     // between them, not by how many there are.
     let mut merger = Merger::default();
-    let mut seen: HashMap<[u8; 32], usize> = HashMap::new();
+    let mut seen: HashMap<Vec<u8>, usize> = HashMap::new();
+    let mut key = Vec::new();
     let resolved = doc.resolve_each(&r, |req| {
-        let print = req.fingerprint();
-        let group = match print.and_then(|f| seen.get(&f).copied()) {
-            Some(g) => g,
-            None => {
+        key.clear();
+        let keyed = req.key(&mut key);
+        let group = match seen.get(key.as_slice()) {
+            Some(&g) if keyed => g,
+            _ => {
                 let g = merger.new_group(run_checks(&req, input, &facts, opt));
-                if let Some(f) = print {
-                    seen.insert(f, g);
+                if keyed {
+                    seen.insert(key.clone(), g);
                 }
                 g
             }
@@ -457,13 +459,19 @@ mod tests {
     use super::*;
 
     /// Checking screens with the same requirements once gives the report
-    /// that checking every screen does.
+    /// that checking every screen does, over screens that differ in what
+    /// the checks read (viewing, overrides, venue, own rules), in what they
+    /// don't (placement.zone), in ways the fields' JSON wouldn't show (an
+    /// override of `[]`, a dwell of -0), with own rules that conflict (so
+    /// their findings name them), and with repeated and empty ids.
     #[test]
     fn grouped_checks_match_checking_every_screen() {
         use crate::testutil::{lunch_file, offer_campaign};
         let mut d = harbourline();
+        d.networks[0].rules.as_mut().unwrap().required_elements[0].within_rect_px =
+            Some(Rect([0, 1600, 1080, 320]));
         let base = d.networks[0].screens[1].clone();
-        for i in 0..90 {
+        for i in 0..120 {
             let mut s = base.clone();
             s.id = format!("X{}", i % 80); // some ids repeat
             s.platform_ids = Default::default();
@@ -481,6 +489,31 @@ mod tests {
                     max_words: Some(3),
                     ..Default::default()
                 }));
+            }
+            if i % 13 == 0 {
+                s.placement.get_or_insert_with(Default::default).zone = format!("zone {i}");
+            }
+            if i % 17 == 0 {
+                s.overrides = Some(Box::new(
+                    serde_json::from_str(r#"{"media":{"static":[]}}"#).unwrap(),
+                ));
+            }
+            if i % 19 == 0 {
+                s.rules = Some(Box::new(RuleSet {
+                    required_elements: vec![RequiredElement {
+                        role: "legal".into(),
+                        when: "offer".into(),
+                        within_rect_px: Some(Rect([0, 0, 1080, 300])),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }));
+            }
+            if i % 23 == 0 {
+                s.viewing.as_mut().unwrap().dwell_s = Some(-0.0);
+            }
+            if i == 40 {
+                s.id = String::new();
             }
             d.networks[0].screens.push(s);
         }
@@ -515,6 +548,69 @@ mod tests {
         assert!(got.iter().all(|c| want(c)), "{got:?}\nvs\n{each:?}");
         for e in &each {
             assert!(grouped.checks.contains(e), "missing {e:?}");
+        }
+    }
+
+    /// An override that clears a list (`"static": []`) and one that leaves
+    /// it alone (`{}`) resolve differently, so their screens are not one
+    /// group, though both serialise to `{}`.
+    #[test]
+    fn overrides_that_clear_a_list_are_not_grouped_with_those_that_do_not() {
+        use crate::testutil::{check_doc, find, lunch_file, offer_campaign};
+        let mut d = harbourline();
+        let n = &mut d.networks[0];
+        let mut a = n.screens[0].clone();
+        a.id = "A".into();
+        a.overrides = Some(Box::new(
+            serde_json::from_str(r#"{"media":{"static":[]},"segments":[]}"#).unwrap(),
+        ));
+        let mut b = a.clone();
+        b.id = "B".into();
+        b.overrides = Some(Box::new(serde_json::from_str(r#"{"media":{}}"#).unwrap()));
+        let target = format!("harbourline.example/retail/{}", a.format);
+        n.screens = vec![a, b];
+        let rep = check_doc(&d, &lunch_file(), Some(&offer_campaign()), &target);
+        let got = find(&rep, CODE_MEDIA_TYPE, Severity::Error);
+        assert_eq!(got.len(), 1, "{:?}", rep.checks);
+        assert_eq!(got[0].screens, ["A"], "only A clears the static types");
+    }
+
+    /// A conflict a screen's own rules cause names the screen, so screens
+    /// that are otherwise alike get their own findings, as checking each
+    /// screen gives.
+    #[test]
+    fn screens_with_their_own_conflicting_rules_are_reported_apart() {
+        use crate::testutil::{check_doc, find, lunch_file, offer_campaign};
+        let mut d = harbourline();
+        d.networks[0].rules.as_mut().unwrap().required_elements[0].within_rect_px =
+            Some(Rect([0, 1600, 1080, 320]));
+        let own = RuleSet {
+            required_elements: vec![RequiredElement {
+                role: "legal".into(),
+                when: "offer".into(),
+                within_rect_px: Some(Rect([0, 0, 1080, 300])),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let n = &mut d.networks[0];
+        let mut a = n.screens[0].clone();
+        a.id = "A".into();
+        a.rules = Some(Box::new(own));
+        let mut b = a.clone();
+        b.id = "B".into();
+        let target = format!("harbourline.example/retail/{}", a.format);
+        n.screens = vec![a, b];
+        let rep = check_doc(&d, &lunch_file(), Some(&offer_campaign()), &target);
+        let got = find(&rep, CODE_RULE_CONFLICT, Severity::Error);
+        assert_eq!(got.len(), 2, "{:?}", rep.checks);
+        for id in ["A", "B"] {
+            assert!(
+                got.iter()
+                    .any(|c| c.message.starts_with(&format!("screen {id} restates"))
+                        && c.screens == [id]),
+                "{id}: {got:?}"
+            );
         }
     }
 

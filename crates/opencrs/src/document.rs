@@ -203,12 +203,12 @@ pub fn check_document(d: &Document) -> Vec<Check> {
     let mut f = Findings::new();
     for n in &d.networks {
         let mut cache = RuleCache::default();
-        let scoped = check_network(d, n, &mut cache, &mut f);
+        let mut scoped = check_network(d, n, &mut cache, &mut f);
         for s in &n.screens {
             if crate::budget::tripped() {
                 break;
             }
-            check_screen(d, n, s, &scoped, &mut cache, &mut f);
+            check_screen(d, n, s, &mut scoped, &mut cache, &mut f);
         }
     }
     crate::budget::explain(Some(d));
@@ -223,6 +223,11 @@ struct Scoped {
     /// By position of the first format with each id, the elements whose
     /// restating by the format conflicts with the network's.
     format_causes: HashMap<usize, HashSet<(String, String)>>,
+    /// By (venue position or `usize::MAX`, format position), which of the
+    /// conflicts of the levels above a screen are not accounted for by the
+    /// venue's or the format's own: those a venue and a format cause
+    /// together. Worked out once for the pair, not for each screen.
+    pair_own: HashMap<(usize, usize), Vec<usize>>,
 }
 
 /// Reports what the network's own rules, its venues' and its formats' cause,
@@ -238,12 +243,13 @@ fn check_network(d: &Document, n: &Network, cache: &mut RuleCache, f: &mut Findi
     }
     let mut scoped = Scoped {
         format_causes: HashMap::new(),
+        pair_own: HashMap::new(),
     };
     for v in &n.venues {
         if let Some(r) = &v.rules {
             unknown_packs(f, r, at(&v.id, ""));
         }
-        for msg in &d.venue_rules(cache, n, v).conflicts {
+        for msg in d.venue_rules(cache, n, v).conflicts.iter() {
             f.add_as(CODE_RULE_CONFLICT, Severity::Error, msg, at(&v.id, ""));
         }
     }
@@ -252,7 +258,7 @@ fn check_network(d: &Document, n: &Network, cache: &mut RuleCache, f: &mut Findi
             unknown_packs(f, r, at("", &fm.id));
         }
         let rules = d.format_rules(cache, n, fm);
-        for msg in &rules.conflicts {
+        for msg in rules.conflicts.iter() {
             f.add_as(CODE_RULE_CONFLICT, Severity::Error, msg, at("", &fm.id));
         }
         // Screens use the first format with an id; a repeat of it is
@@ -277,7 +283,7 @@ fn check_screen(
     d: &Document,
     n: &Network,
     s: &Screen,
-    scoped: &Scoped,
+    scoped: &mut Scoped,
     cache: &mut RuleCache,
     f: &mut Findings,
 ) {
@@ -286,20 +292,44 @@ fn check_screen(
     match d.resolve_screen_with(cache, n, s) {
         Err(e) => f.add(CODE_REFERENCE, &e.to_string()),
         Ok(r) => {
-            let format_at = position_of(&n.formats, n.format(&s.format).expect("resolved"));
-            let covered = |c: &ConflictCause| match c.level {
-                // The venue's conflicts with the network don't depend on
-                // the screen, and were reported for the venue.
-                Level::Venue => true,
-                Level::Format => format_at
-                    .and_then(|i| scoped.format_causes.get(&i))
-                    .is_some_and(|set| set.contains(&(c.role.clone(), c.when.clone()))),
-                _ => false,
-            };
-            for (msg, cause) in r.rules.conflicts.iter().zip(&r.rules.causes) {
-                if !covered(cause) {
-                    f.add(CODE_RULE_CONFLICT, msg);
-                }
+            let format_at = n
+                .format(&s.format)
+                .and_then(|x| position_of(&n.formats, x))
+                .unwrap_or(usize::MAX);
+            let venue_at = r
+                .venue
+                .and_then(|v| position_of(&n.venues, v))
+                .unwrap_or(usize::MAX);
+            let (conflicts, causes) = (&r.rules.conflicts, &r.rules.causes);
+            // The conflicts of the levels above the screen come first, and
+            // are the same for every screen with this venue and format; the
+            // screen's own follow.
+            let own_from = causes
+                .iter()
+                .position(|c| matches!(c.level, Level::Screen | Level::ScreenOverrides))
+                .unwrap_or(causes.len());
+            let above = scoped
+                .pair_own
+                .entry((venue_at, format_at))
+                .or_insert_with(|| {
+                    let covered = |c: &ConflictCause| match c.level {
+                        // The venue's conflicts with the network don't
+                        // depend on the screen, and were reported for the
+                        // venue.
+                        Level::Venue => true,
+                        Level::Format => scoped
+                            .format_causes
+                            .get(&format_at)
+                            .is_some_and(|set| set.contains(&(c.role.clone(), c.when.clone()))),
+                        _ => false,
+                    };
+                    (0..own_from).filter(|&i| !covered(&causes[i])).collect()
+                });
+            for &i in above.iter() {
+                f.add(CODE_RULE_CONFLICT, &conflicts[i]);
+            }
+            for msg in &conflicts[own_from..] {
+                f.add(CODE_RULE_CONFLICT, msg);
             }
             // The screen's own rules; the levels above it were reported.
             let own = [
@@ -369,10 +399,6 @@ impl<'de> Deserialize<'de> for Members<'de> {
 }
 
 impl<'a> Members<'a> {
-    fn parse(text: &'a str) -> Option<Self> {
-        serde_json::from_str(text).ok()
-    }
-
     /// The text of the object with member `name` left out and, if `put` is
     /// given, `name: put` added; None if `name` is there twice, which the
     /// typed model refuses.
@@ -404,32 +430,128 @@ impl<'a> Members<'a> {
 /// the whole document and checking it. None when the text doesn't decode as
 /// a document, as `serde_json::from_slice::<Document>` would fail.
 pub fn check_document_text(raw: &str) -> Option<Vec<Check>> {
-    let root = Members::parse(raw)?;
-    let (head, networks) = root.without("networks", "[]")?;
-    let mut d: Document = serde_json::from_str(&head).ok()?;
-    let networks: Vec<&RawValue> = serde_json::from_str(networks?.get()).ok()?;
-    let mut shells = Vec::with_capacity(networks.len());
-    let mut lists = Vec::with_capacity(networks.len());
-    for net in networks {
-        let (head, screens) = Members::parse(net.get())?.without("screens", "[]")?;
+    let root: Root = serde_json::from_str(raw).ok()?;
+    let mut d: Document = serde_json::from_str(&root.head()?).ok()?;
+    let mut shells = Vec::with_capacity(root.networks.len());
+    let mut lists = Vec::with_capacity(root.networks.len());
+    for net in root.networks {
+        let (head, screens) = net.without("screens", "[]")?;
         shells.push(serde_json::from_str::<Network>(&head).ok()?);
-        lists.push(serde_json::from_str::<Vec<&RawValue>>(screens?.get()).ok()?);
+        lists.push(screens?);
     }
     d.networks = shells;
     let mut f = Findings::new();
     for (n, list) in d.networks.iter().zip(lists) {
         let mut cache = RuleCache::default();
-        let scoped = check_network(&d, n, &mut cache, &mut f);
-        for raw in list {
+        let mut scoped = check_network(&d, n, &mut cache, &mut f);
+        // The screens are decoded one at a time from the list's text, and
+        // no further once the budget is spent.
+        let mut de = serde_json::Deserializer::from_str(list.get());
+        let mut stopped = false;
+        let mut each = |s: Screen| {
             if crate::budget::tripped() {
-                break;
+                stopped = true;
+                return false;
             }
-            let s = serde_json::from_str::<LintScreen>(raw.get()).ok()?.0;
-            check_screen(&d, n, &s, &scoped, &mut cache, &mut f);
+            check_screen(&d, n, &s, &mut scoped, &mut cache, &mut f);
+            true
+        };
+        let read = serde::de::DeserializeSeed::deserialize(ScreenStream(&mut each), &mut de);
+        if !stopped {
+            read.ok()?;
+            de.end().ok()?;
         }
     }
     crate::budget::explain(Some(&d));
     Some(f.finish())
+}
+
+/// A document's members except `networks`, each left as its text, and its
+/// networks each as their members, so the text is read once.
+struct Root<'a> {
+    head: Vec<(String, &'a RawValue)>,
+    networks: Vec<Members<'a>>,
+    /// `networks` was there twice, which the typed model refuses.
+    repeated: bool,
+}
+
+impl Root<'_> {
+    /// The text of the document with `networks` set to `[]`.
+    fn head(&self) -> Option<String> {
+        if self.repeated {
+            return None;
+        }
+        let mut text = String::from("{");
+        for (k, v) in &self.head {
+            text.push_str(&serde_json::to_string(k).ok()?);
+            text.push(':');
+            text.push_str(v.get());
+            text.push(',');
+        }
+        text.push_str("\"networks\":[]}");
+        Some(text)
+    }
+}
+
+impl<'de> Deserialize<'de> for Root<'de> {
+    fn deserialize<D: Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
+        struct V;
+        impl<'de> Visitor<'de> for V {
+            type Value = Root<'de>;
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str("a document")
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut m: A) -> Result<Self::Value, A::Error> {
+                let mut root = Root {
+                    head: Vec::new(),
+                    networks: Vec::new(),
+                    repeated: false,
+                };
+                let mut seen = false;
+                while let Some(k) = m.next_key::<String>()? {
+                    if k == "networks" {
+                        root.repeated |= seen;
+                        seen = true;
+                        root.networks = m.next_value::<Vec<Members>>()?;
+                    } else {
+                        root.head.push((k, m.next_value::<&RawValue>()?));
+                    }
+                }
+                if !seen {
+                    return Err(serde::de::Error::missing_field("networks"));
+                }
+                Ok(root)
+            }
+        }
+        de.deserialize_map(V)
+    }
+}
+
+/// Reads a list of screens one at a time, handing each to a function that
+/// says whether to go on; stopping leaves the rest of the list unread,
+/// which the deserializer reports as an error the caller disregards.
+struct ScreenStream<'f>(&'f mut dyn FnMut(Screen) -> bool);
+
+impl<'de> serde::de::DeserializeSeed<'de> for ScreenStream<'_> {
+    type Value = ();
+    fn deserialize<D: Deserializer<'de>>(self, de: D) -> Result<(), D::Error> {
+        de.deserialize_seq(self)
+    }
+}
+
+impl<'de> Visitor<'de> for ScreenStream<'_> {
+    type Value = ();
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("a list of screens")
+    }
+    fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<(), A::Error> {
+        while let Some(s) = seq.next_element::<LintScreen>()? {
+            if !(self.0)(s.0) {
+                return Err(serde::de::Error::custom("stopped"));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Warns about each referenced rule pack that isn't built in, naming the

@@ -39,6 +39,9 @@ pub(crate) enum Work {
     Views,
     /// Screens visited to answer a reference.
     Screens,
+    /// A format's blocked regions rebuilt for a screen whose overrides
+    /// change them.
+    Overrides,
 }
 
 struct State {
@@ -167,8 +170,9 @@ pub(crate) fn charge_flat(units: u64) -> bool {
     })
 }
 
-/// Whether the current budget is spent.
-pub(crate) fn tripped() -> bool {
+/// Whether the current budget is spent, so a caller building something for
+/// each screen (such as views) should stop and ask [`explain`] why.
+pub fn tripped() -> bool {
     CURRENT.with_borrow(|c| c.as_ref().is_some_and(Budget::tripped))
 }
 
@@ -286,6 +290,12 @@ fn describe(
             "{} screen views were built for {label}{} ({} units).",
             num(calls),
             at(&path),
+            num(units)
+        ),
+        Work::Overrides => format!(
+            "The blocked regions of {label}{} were rebuilt for each of {} screens whose overrides change them ({} units).",
+            at(&path),
+            num(calls),
             num(units)
         ),
     };

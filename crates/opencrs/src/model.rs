@@ -53,20 +53,29 @@ pub struct Network {
     pub(crate) lookup: Lookup,
 }
 
-/// Sorted indexes over a network's venues, formats and screens, built the
-/// first time a lookup needs one, so finding an id is a binary search, not a
-/// scan. Each holds positions ordered by id and then position, so of repeated
-/// ids the first still wins, as it does for a scan. It is not part of the
-/// network's value: a clone starts without one, and two networks are equal
-/// whatever they have indexed. A lookup falls back to a scan if the list
-/// has a different length than when the index was built.
+/// Indexes over a network's venues, formats and screens, built the first
+/// time a lookup needs one, so finding an id is a map lookup or a binary
+/// search, not a scan. Of repeated ids the first still wins, as it does for
+/// a scan. It is not part of the network's value: a clone starts without
+/// one, and two networks are equal whatever they have indexed. A lookup
+/// falls back to a scan if the list has a different length than when the
+/// index was built.
 #[derive(Default)]
 pub(crate) struct Lookup {
-    pub(crate) venues: OnceLock<Vec<u32>>,
-    pub(crate) formats: OnceLock<Vec<u32>>,
+    pub(crate) venues: OnceLock<ById>,
+    pub(crate) formats: OnceLock<ById>,
+    /// Positions ordered by id and then position.
     pub(crate) screens: OnceLock<Vec<u32>>,
-    /// Screens by their format.
+    /// Screens by their format: positions ordered by format and then
+    /// position, so a format's screens are one run.
     pub(crate) by_format: OnceLock<Vec<u32>>,
+}
+
+/// The first position of each id in a list, and the list's length when the
+/// index was built.
+pub(crate) struct ById {
+    pub(crate) by: std::collections::HashMap<String, u32>,
+    pub(crate) len: usize,
 }
 
 impl Clone for Lookup {
