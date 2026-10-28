@@ -163,17 +163,19 @@ impl Http {
     /// seconds.
     pub fn new(allow_local: bool, timeout: Duration) -> Http {
         // The system trust store, as Go's client uses.
+        Http::with_roots(allow_local, timeout, RootCerts::PlatformVerifier)
+    }
+
+    /// [`Http::new`] trusting other roots, for tests with a certificate of
+    /// their own.
+    pub(crate) fn with_roots(allow_local: bool, timeout: Duration, roots: RootCerts) -> Http {
         let config = ureq::Agent::config_builder()
             .proxy(None)
             .max_redirects(0)
             .max_redirects_will_error(false)
             .http_status_as_error(false)
             .user_agent("opencrs-validator/0.1")
-            .tls_config(
-                TlsConfig::builder()
-                    .root_certs(RootCerts::PlatformVerifier)
-                    .build(),
-            )
+            .tls_config(TlsConfig::builder().root_certs(roots).build())
             .build();
         let agent = ureq::Agent::with_parts(
             config,

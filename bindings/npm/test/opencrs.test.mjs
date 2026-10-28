@@ -405,8 +405,9 @@ test("fetchPublisher is async and says what the publisher check says of a domain
   assert.match((await opencrs.fetchPublisher("127.0.0.1:1")).error, /isn't a publisher domain/);
 });
 
-test("fetchPublisher validates its options before fetching", () => {
-  assert.throws(() => opencrs.fetchPublisher("harbourline.example", { now: "later" }), /not an RFC 3339 time/);
+test("fetchPublisher and discover reject, not throw, for a bad option", async () => {
+  await assert.rejects(opencrs.fetchPublisher("harbourline.example", { now: "later" }), /not an RFC 3339 time/);
+  await assert.rejects(opencrs.discover("harbourline.example", { now: "later" }), /not an RFC 3339 time/);
 });
 
 /** A publisher on a local port: its index lists two documents, and the paths under /bad misbehave. */

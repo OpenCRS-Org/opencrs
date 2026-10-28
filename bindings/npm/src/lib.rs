@@ -199,6 +199,12 @@ impl ToNapiValue for Json {
     }
 }
 
+/// An RFC 3339 time, or the host's now for none. Parsed where the work runs,
+/// so a bad one rejects the promise.
+fn parse_time(now: Option<&str>) -> Result<DateTime<FixedOffset>> {
+    parse_now(now.filter(|n| !n.is_empty())).map_err(fail)
+}
+
 fn string_property(page: &Object, name: &str) -> Result<String> {
     Ok(page.get::<String>(name)?.unwrap_or_default())
 }
@@ -253,7 +259,7 @@ pub fn publisher(
             (url, Page { body, ..head })
         })
         .collect();
-    let now = parse_now(now.as_deref().filter(|n| !n.is_empty())).map_err(fail)?;
+    let now = parse_time(now.as_deref())?;
     let missing = missing
         .as_deref()
         .filter(|m| !m.is_empty())
@@ -285,7 +291,7 @@ fn bytes(v: Option<f64>) -> usize {
 pub struct FetchPublisherTask {
     domain: String,
     opts: opencrs_fetch::FetchOptions,
-    now: DateTime<FixedOffset>,
+    now: Option<String>,
 }
 
 #[napi]
@@ -294,7 +300,8 @@ impl Task for FetchPublisherTask {
     type JsValue = Json;
 
     fn compute(&mut self) -> Result<Value> {
-        let f = opencrs_fetch::fetch_publisher(&self.domain, self.now, &self.opts);
+        let now = parse_time(self.now.as_deref())?;
+        let f = opencrs_fetch::fetch_publisher(&self.domain, now, &self.opts);
         if f.rounds_exhausted {
             return Err(fail(format!(
                 "the publisher check still wanted URLs after its last round ({} rounds)",
@@ -326,10 +333,9 @@ pub fn fetch_publisher(
         timeout_ms: None,
         now: None,
     });
-    let now = parse_now(o.now.as_deref().filter(|n| !n.is_empty())).map_err(fail)?;
     Ok(AsyncTask::new(FetchPublisherTask {
         domain,
-        now,
+        now: o.now,
         opts: opencrs_fetch::FetchOptions {
             max_document_bytes: bytes(o.max_document_bytes),
             max_total_bytes: bytes(o.max_total_bytes),
@@ -355,7 +361,7 @@ pub struct DiscoverTask {
     domain: String,
     tokens: HashMap<String, String>,
     allow_local_http: bool,
-    now: DateTime<FixedOffset>,
+    now: Option<String>,
 }
 
 #[napi]
@@ -364,9 +370,9 @@ impl Task for DiscoverTask {
     type JsValue = Json;
 
     fn compute(&mut self) -> Result<Value> {
-        let r =
-            opencrs_fetch::discover(&self.domain, &self.tokens, self.allow_local_http, self.now)
-                .map_err(fail)?;
+        let now = parse_time(self.now.as_deref())?;
+        let r = opencrs_fetch::discover(&self.domain, &self.tokens, self.allow_local_http, now)
+            .map_err(fail)?;
         to_value(&r)
     }
 
@@ -391,6 +397,6 @@ pub fn discover(
         domain,
         tokens: tokens.unwrap_or_default(),
         allow_local_http: allow_local_http.unwrap_or(false),
-        now: parse_now(now.as_deref().filter(|n| !n.is_empty())).map_err(fail)?,
+        now,
     }))
 }

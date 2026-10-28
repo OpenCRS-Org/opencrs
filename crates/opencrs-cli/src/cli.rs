@@ -56,7 +56,7 @@ macro_rules! exit_rule_packs {
 }
 macro_rules! exit_publisher {
     () => {
-        "0 no errors, 1 the check found errors, 2 usage error or the index couldn't be used"
+        "0 no errors, 1 the check found errors, 2 usage error or the index couldn't be fetched"
     };
 }
 

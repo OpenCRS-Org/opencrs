@@ -12,6 +12,8 @@ pub mod publisher;
 #[cfg(test)]
 #[path = "../../opencrs-cli/tests/common/server.rs"]
 mod server;
+#[cfg(test)]
+mod tls_server;
 
 pub use http::{Http, Reply, UreqFetcher};
 pub use publisher::{FetchOptions, Fetched, fetch_publisher};

@@ -231,6 +231,7 @@ mod tests {
     use std::collections::HashMap;
 
     use crate::server::{Resp, Server};
+    use crate::tls_server::TlsServer;
 
     fn wanted(url: &str) -> WantedUrl {
         WantedUrl {
@@ -517,5 +518,115 @@ mod tests {
         assert!(r.documents[0].raw.is_empty(), "raw is not kept");
         let e = crate::discover(&srv.addr, &tokens, false, now()).unwrap_err();
         assert!(e.to_string().contains("isn't a publisher domain"), "{e}");
+    }
+
+    // The same client over a real TLS handshake, against a local server with
+    // a certificate of its own.
+
+    fn https_publisher() -> TlsServer {
+        TlsServer::start(|r, _| {
+            match r.path.as_str() {
+            "/.well-known/opencrs.json" => Resp::ok(
+                r#"{"opencrs":"0.1","publisher":{"id":"harbourline.example","name":"Harbourline"},"documents":[{"url":"https://harbourline.example/retail.screens.json","network":"retail"}]}"#,
+            )
+            .header("Content-Type", "application/json")
+            .header("Cache-Control", "max-age=60")
+            .header("ETag", "\"i1\""),
+            "/retail.screens.json" => Resp::ok(gzip(DOC.as_bytes()))
+                .header("Content-Type", "application/json")
+                .header("Content-Encoding", "gzip")
+                .header("Cache-Control", "max-age=60")
+                .header("ETag", "\"d1\""),
+            _ => Resp::status(404),
+        }
+        })
+    }
+
+    #[test]
+    fn https_pages_are_read_with_their_headers() {
+        let srv = TlsServer::start(|r, port| match r.path.as_str() {
+            "/ok" => Resp::ok("{}")
+                .header("ETag", "\"v1\"")
+                .header("Content-Type", "application/json")
+                .header("Access-Control-Allow-Origin", "*"),
+            "/zip" => Resp::ok(gzip(b"{\"a\":1}")).header("Content-Encoding", "gzip"),
+            "/redirect" => Resp::redirect("/ok"),
+            // HTTPS to HTTP, even to the machine itself, is refused.
+            "/down" => Resp::redirect(&format!("http://localhost:{port}/ok")),
+            "/private" => Resp::redirect("https://10.0.0.1/x"),
+            _ => Resp::status(404),
+        });
+        let http = Http::with_roots(true, Duration::from_secs(10), srv.roots());
+        let get = |path: &str| {
+            let w = wanted(&format!("{}{path}", srv.url()));
+            fetch_held(&http, true, &w, 0)
+        };
+        let h = get("/ok");
+        assert_eq!(
+            (h.status, h.body.as_slice(), h.error.as_str()),
+            (200, &b"{}"[..], "")
+        );
+        assert_eq!(h.etag, "\"v1\"");
+        assert_eq!(h.content_type, "application/json");
+        assert_eq!(h.allow_origin, "*");
+        let h = get("/zip");
+        assert_eq!(
+            (h.body.as_slice(), h.content_encoding.as_str()),
+            (&b"{\"a\":1}"[..], "gzip")
+        );
+        assert_eq!(get("/redirect").status, 200);
+        assert_eq!(get("/nope").status, 404);
+        let h = get("/down");
+        assert!(
+            h.error.contains("refusing redirect") && h.error.contains("not HTTPS"),
+            "{}",
+            h.error
+        );
+        assert_eq!(h.status, 0);
+        let h = get("/private");
+        assert!(
+            h.error.contains("refusing to connect to 10.0.0.1"),
+            "{}",
+            h.error
+        );
+    }
+
+    #[test]
+    fn a_certificate_the_system_does_not_trust_is_refused() {
+        let srv = TlsServer::start(|_, _| Resp::ok("{}"));
+        let http = Http::new(true, Duration::from_secs(10));
+        let h = fetch_held(&http, true, &wanted(&format!("{}/ok", srv.url())), 0);
+        assert_eq!((h.status, h.body.len()), (0, 0));
+        assert!(
+            !h.error.is_empty(),
+            "a self-signed certificate was accepted"
+        );
+    }
+
+    #[test]
+    fn the_loop_runs_over_https() {
+        let srv = https_publisher();
+        let http = Http::with_roots(true, Duration::from_secs(10), srv.roots());
+        let calls = Cell::new(0);
+        let f = run(
+            "harbourline.example",
+            now(),
+            &FetchOptions::default(),
+            &mut |w, limit| {
+                calls.set(calls.get() + 1);
+                let url = w.url.replace("https://harbourline.example", &srv.url());
+                fetch_held(&http, true, &WantedUrl { url, ..w.clone() }, limit)
+            },
+        );
+        assert!(!f.rounds_exhausted);
+        assert_eq!(f.check.errors, 0, "{:?}", f.check.advice);
+        assert_eq!(calls.get(), 2);
+        let docs = &f.check.discovery.as_ref().unwrap().documents;
+        assert_eq!(docs[0].status.to_string(), "trusted", "{}", docs[0].reason);
+        assert_eq!(docs[0].screens, 1, "the gzipped body was read");
+        assert_eq!(
+            *srv.seen.lock().unwrap(),
+            ["/.well-known/opencrs.json", "/retail.screens.json"]
+        );
     }
 }
