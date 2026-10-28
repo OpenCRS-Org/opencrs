@@ -1,9 +1,9 @@
 use crate::cli::FetchArgs;
-use crate::http::UreqFetcher;
 use opencrs::discover::{
     DiscoveredDocument, DiscoveryResult, Fetcher, Options, Status, discover, merge, verify,
 };
 use opencrs::json;
+use opencrs_fetch::UreqFetcher;
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Write;
@@ -110,6 +110,16 @@ pub fn run_with(
         return status;
     }
 
+    print_discovery(stdout, &res);
+    if let Some(v) = &verified {
+        let _ = writeln!(stdout, "\n{target}: {}. {}", v.status, v.reason);
+    }
+    status
+}
+
+/// What `fetch` prints for a discovery: the index, each document with its
+/// trust decision, delegations and limits. `publisher` prints it too.
+pub(crate) fn print_discovery(stdout: &mut dyn Write, res: &DiscoveryResult) {
     let _ = writeln!(
         stdout,
         "{} ({}): index at {}",
@@ -160,10 +170,6 @@ pub fn run_with(
     for why in &res.limits {
         let _ = writeln!(stdout, "  limit     {why}");
     }
-    if let Some(v) = &verified {
-        let _ = writeln!(stdout, "\n{target}: {}. {}", v.status, v.reason);
-    }
-    status
 }
 
 /// The file name a document is saved under: the last non-empty segment

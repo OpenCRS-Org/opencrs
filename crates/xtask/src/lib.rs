@@ -9,7 +9,8 @@
 use clap::Command;
 use clap_mangen::{Man, roff::Roff, roff::bold, roff::roman};
 use opencrs_cli::{
-    DOCS_URL, EXIT_CHECK, EXIT_CONFORMANCE, EXIT_FETCH, EXIT_RESOLVE, EXIT_SCHEMA, Shell, command,
+    DOCS_URL, EXIT_CALC, EXIT_CHECK, EXIT_CONFORMANCE, EXIT_FETCH, EXIT_PROBE, EXIT_PUBLISHER,
+    EXIT_RESOLVE, EXIT_RULE_PACKS, EXIT_SCHEMA, Shell, command,
 };
 use std::io;
 use std::path::{Path, PathBuf};
@@ -190,6 +191,37 @@ fn extra_sections() -> Vec<u8> {
         &mut r,
         &["opencrs fetch --output specs harbourline.example"],
     );
+    para(&mut r, "Check how a publisher serves its specs:");
+    example(&mut r, &["opencrs publisher harbourline.example"]);
+    para(&mut r, "See what the validator reads from a creative file:");
+    example(&mut r, &["opencrs probe lunch-portrait.png"]);
+    para(
+        &mut r,
+        "Work out the smallest text readable from 2 to 6 metres:",
+    );
+    example(
+        &mut r,
+        &["opencrs legibility --near 2 --far 6 --screen-width-mm 940 --screen-width-px 1080"],
+    );
+    para(
+        &mut r,
+        "Work out what a driver at 80 km/h can read, and a rule pack's limits:",
+    );
+    example(
+        &mut r,
+        &[
+            "opencrs dwell --speed 80 --near 20 --far 150 \\",
+            "    --pack au-nsw-transport-corridor@2017-11",
+        ],
+    );
+    para(&mut r, "List the built-in rule packs, then show one:");
+    example(
+        &mut r,
+        &[
+            "opencrs rule-packs",
+            "opencrs rule-packs au-nsw-transport-corridor@2017-11",
+        ],
+    );
     para(&mut r, "Install the zsh completions:");
     example(&mut r, &["opencrs completion zsh > ~/.zfunc/_opencrs"]);
 
@@ -205,6 +237,10 @@ fn extra_sections() -> Vec<u8> {
         ("schema", EXIT_SCHEMA),
         ("resolve", EXIT_RESOLVE),
         ("fetch", EXIT_FETCH),
+        ("publisher", EXIT_PUBLISHER),
+        ("probe", EXIT_PROBE),
+        ("legibility, dwell", EXIT_CALC),
+        ("rule-packs", EXIT_RULE_PACKS),
         ("conformance", EXIT_CONFORMANCE),
     ] {
         tagged(&mut r, cmd, text);
@@ -227,21 +263,24 @@ fn extra_sections() -> Vec<u8> {
     tagged(
         &mut r,
         "HTTP_PROXY, HTTPS_PROXY",
-        "Ignored by fetch. A proxy would resolve host names where the \
-         addresses can't be checked, so fetch always connects directly.",
+        "Ignored by fetch and publisher. A proxy would resolve host names where the \
+         addresses can't be checked, so they always connect directly.",
     );
 
     r.control("SH", ["NETWORK"]);
     para(
         &mut r,
-        "Only fetch uses the network. It is built so that an index cannot \
-         point it at a service on the machine or its network.",
+        "Only fetch and publisher use the network, and they share one HTTP \
+         client. It is built so that an index cannot point it at a service on \
+         the machine or its network.",
     );
     tagged(
         &mut r,
         "Scheme",
-        "Only https:// URLs are fetched. With --allow-local-http, http:// is \
-         allowed for localhost, 127.0.0.1 and [::1] only.",
+        "Only https:// URLs are fetched. With fetch --allow-local-http, \
+         http:// is allowed for localhost, 127.0.0.1 and [::1] only, and \
+         only for a domain that is itself one of them: a public publisher \
+         can't use it to reach localhost.",
     );
     tagged(
         &mut r,
@@ -271,6 +310,16 @@ fn extra_sections() -> Vec<u8> {
         "A document larger than 50 MiB (52428800 bytes) is refused. One \
          discovery reads at most 512 MiB in total, indexes and documents \
          together.",
+    );
+    tagged(
+        &mut r,
+        "Publisher check",
+        "publisher fetches one URL at a time and allows each request 2 \
+         minutes, redirects included, and the whole check 5. It reads at \
+         most 4000 URLs, 50 MiB for one page and 180 MiB in all (counting \
+         what comes over the wire and again once decompressed); a URL past a \
+         limit, or not fetched by the time the 5 minutes are up, is reported \
+         as not fetched.",
     );
     tagged(
         &mut r,

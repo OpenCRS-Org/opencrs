@@ -72,6 +72,60 @@ _arguments "${_arguments_options[@]}" : \
 ':target -- A publisher'\''s domain, or the URL of one document:_default' \
 && ret=0
 ;;
+(publisher)
+_arguments "${_arguments_options[@]}" : \
+'--now=[Check time, RFC 3339 (default\: now)]:TIME:_default' \
+'--json[Print the result as JSON]' \
+'-h[Show help (--help shows more)]' \
+'--help[Show help (--help shows more)]' \
+':domain -- A publisher'\''s domain:_default' \
+&& ret=0
+;;
+(probe)
+_arguments "${_arguments_options[@]}" : \
+'--json[Print the probes as a JSON array]' \
+'-h[Show help (--help shows more)]' \
+'--help[Show help (--help shows more)]' \
+'*::files -- The files to read:_default' \
+&& ret=0
+;;
+(legibility)
+_arguments "${_arguments_options[@]}" : \
+'--near=[Nearest viewing distance, metres]:METRES:_default' \
+'--far=[Farthest viewing distance, metres]:METRES:_default' \
+'--ratio=[Text is legible at this multiple of its height (default 150)]:RATIO:_default' \
+'--screen-width-mm=[The screen'\''s width in millimetres, to give sizes in pixels]:MM:_default' \
+'--screen-width-px=[The screen'\''s width in pixels, with --screen-width-mm]:PX:_default' \
+'--dwell=[Dwell time in seconds, to give a word limit]:SECONDS:_default' \
+'--rate=[Reading rate in words per second (default 2)]:WORDS:_default' \
+'--json[Print the result as JSON]' \
+'-h[Show help (--help shows more)]' \
+'--help[Show help (--help shows more)]' \
+&& ret=0
+;;
+(dwell)
+_arguments "${_arguments_options[@]}" : \
+'--speed=[The speed, km/h]:KMH:_default' \
+'--near=[Nearest viewing distance, metres]:METRES:_default' \
+'--far=[Farthest viewing distance, metres]:METRES:_default' \
+'--ratio=[Text is legible at this multiple of its height (default 150)]:RATIO:_default' \
+'--rate=[Reading rate in words per second (default 2)]:WORDS:_default' \
+'--screen-width-mm=[The screen'\''s width in millimetres, to give sizes in pixels]:MM:_default' \
+'--screen-width-px=[The screen'\''s width in pixels, with --screen-width-mm]:PX:_default' \
+'*--pack=[Show this built-in rule pack'\''s limits at the speed, repeatable]:REF:_default' \
+'--json[Print the result as JSON]' \
+'-h[Show help (--help shows more)]' \
+'--help[Show help (--help shows more)]' \
+&& ret=0
+;;
+(rule-packs)
+_arguments "${_arguments_options[@]}" : \
+'--json[Print as JSON]' \
+'-h[Show help (--help shows more)]' \
+'--help[Show help (--help shows more)]' \
+'::reference -- A rule pack, as name@version (default\: list them all):_default' \
+&& ret=0
+;;
 (conformance)
 _arguments "${_arguments_options[@]}" : \
 '--level=[Level to test\: core, layout or full]:LEVEL:_default' \
@@ -109,6 +163,11 @@ _opencrs_commands() {
 'schema:Check documents against the OpenCRS schemas' \
 'resolve:Show the requirements for a format or a screen' \
 'fetch:Find a publisher'\''s specs and check which to trust' \
+'publisher:Check a publisher'\''s published specs the way a media owner would' \
+'probe:Show what the validator reads from a file' \
+'legibility:Work out minimum text sizes for a viewing distance' \
+'dwell:Work out what a driver can read of a sign at a speed' \
+'rule-packs:List the built-in rule packs, or show one' \
 'conformance:Run the conformance suite against a validator' \
 'completion:Print shell completions' \
 'version:Show the tool, spec and rule pack versions' \
@@ -130,15 +189,40 @@ _opencrs__subcmd__conformance_commands() {
     local commands; commands=()
     _describe -t commands 'opencrs conformance commands' commands "$@"
 }
+(( $+functions[_opencrs__subcmd__dwell_commands] )) ||
+_opencrs__subcmd__dwell_commands() {
+    local commands; commands=()
+    _describe -t commands 'opencrs dwell commands' commands "$@"
+}
 (( $+functions[_opencrs__subcmd__fetch_commands] )) ||
 _opencrs__subcmd__fetch_commands() {
     local commands; commands=()
     _describe -t commands 'opencrs fetch commands' commands "$@"
 }
+(( $+functions[_opencrs__subcmd__legibility_commands] )) ||
+_opencrs__subcmd__legibility_commands() {
+    local commands; commands=()
+    _describe -t commands 'opencrs legibility commands' commands "$@"
+}
+(( $+functions[_opencrs__subcmd__probe_commands] )) ||
+_opencrs__subcmd__probe_commands() {
+    local commands; commands=()
+    _describe -t commands 'opencrs probe commands' commands "$@"
+}
+(( $+functions[_opencrs__subcmd__publisher_commands] )) ||
+_opencrs__subcmd__publisher_commands() {
+    local commands; commands=()
+    _describe -t commands 'opencrs publisher commands' commands "$@"
+}
 (( $+functions[_opencrs__subcmd__resolve_commands] )) ||
 _opencrs__subcmd__resolve_commands() {
     local commands; commands=()
     _describe -t commands 'opencrs resolve commands' commands "$@"
+}
+(( $+functions[_opencrs__subcmd__rule-packs_commands] )) ||
+_opencrs__subcmd__rule-packs_commands() {
+    local commands; commands=()
+    _describe -t commands 'opencrs rule-packs commands' commands "$@"
 }
 (( $+functions[_opencrs__subcmd__schema_commands] )) ||
 _opencrs__subcmd__schema_commands() {

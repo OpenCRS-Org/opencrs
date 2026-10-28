@@ -218,5 +218,29 @@ if (CHECK_PENDING) {
   assert.equal(r.discovery.documents[0].status, "trusted");
 }
 
+// Every operation in parity/operations.json is on the loader's object, and
+// nothing else is (but the `_` test hooks): adding an operation to the file
+// fails here until js/opencrs.js has it, or the file says why it can't.
+{
+  const manifest = JSON.parse(await readFile(new URL("../parity/operations.json", import.meta.url), "utf8"));
+  const listed = new Set(manifest.helpers.js);
+  for (const [op, entry] of Object.entries(manifest.operations)) {
+    const names = entry.js;
+    if (names === null) {
+      assert.ok(manifest.exceptions[`js.${op}`], `${op}: no JavaScript name and no exception`);
+      assert.ok(!(op in api) && !(op.replace(/_(\w)/g, (_, c) => c.toUpperCase()) in api), `${op}: has an exception but js/opencrs.js has it`);
+      continue;
+    }
+    assert.ok(Array.isArray(names) && names.length > 0, `${op}: js needs a list of names or null`);
+    assert.equal(manifest.exceptions[`js.${op}`], undefined, `${op}: has JavaScript names and an exception`);
+    for (const name of names) {
+      assert.ok(name in api, `${op}: js/opencrs.js has no ${name}`);
+      listed.add(name);
+    }
+  }
+  const have = Object.keys(api).filter((k) => !k.startsWith("_"));
+  assert.deepEqual(have.sort(), [...listed].sort(), "an export of js/opencrs.js is missing from parity/operations.json");
+}
+
 console.log(`ok: opencrs ${api.version} WebAssembly${CHECK_PENDING ? " (check pending)" : ""}`);
 process.exit(0);

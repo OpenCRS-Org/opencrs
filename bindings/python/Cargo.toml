@@ -18,6 +18,7 @@ doctest = false
 
 [dependencies]
 opencrs = { path = "../../crates/opencrs", features = ["fs", "parallel"] }
+opencrs-fetch = { path = "../../crates/opencrs-fetch" }
 pyo3 = { version = "0.30", features = ["abi3-py39"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

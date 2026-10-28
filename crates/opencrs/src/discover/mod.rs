@@ -12,7 +12,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub use fetch::{
-    FetchError, Fetcher, MAX_DOCUMENT_BYTES, Request, Response, same_url, scheme_allowed,
+    FetchError, Fetcher, MAX_DOCUMENT_BYTES, Request, Response, is_local_host, same_url,
+    scheme_allowed,
 };
 
 /// The most documents, and the most delegates, one index may list.
@@ -36,7 +37,6 @@ pub use merge::merge;
 
 use crate::error::Error;
 use crate::schema::{Kind, SchemaOptions, validate_schema};
-use fetch::is_local_host;
 
 /// A publisher's `/.well-known/opencrs.json`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -377,6 +377,19 @@ pub fn discover(
     fetcher: &dyn Fetcher,
 ) -> Result<DiscoveryResult, Error> {
     let domain = domain.to_lowercase();
+    // Local testing is for a publisher on this machine. A public publisher
+    // that lists a localhost document, redirects to it or names it as a
+    // delegate is not testing, so the mode is off for it.
+    let public;
+    let opt = if opt.allow_local_http && !is_local_host(&domain) {
+        public = Options {
+            allow_local_http: false,
+            ..opt.clone()
+        };
+        &public
+    } else {
+        opt
+    };
     if !may_publish(&domain, opt) {
         return Err(Error::msg(format!(
             "{} isn't a publisher domain (a host name such as harbourline.example)",

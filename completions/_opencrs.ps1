@@ -29,6 +29,11 @@ Register-ArgumentCompleter -Native -CommandName 'opencrs' -ScriptBlock {
             [CompletionResult]::new('schema', 'schema', [CompletionResultType]::ParameterValue, 'Check documents against the OpenCRS schemas')
             [CompletionResult]::new('resolve', 'resolve', [CompletionResultType]::ParameterValue, 'Show the requirements for a format or a screen')
             [CompletionResult]::new('fetch', 'fetch', [CompletionResultType]::ParameterValue, 'Find a publisher''s specs and check which to trust')
+            [CompletionResult]::new('publisher', 'publisher', [CompletionResultType]::ParameterValue, 'Check a publisher''s published specs the way a media owner would')
+            [CompletionResult]::new('probe', 'probe', [CompletionResultType]::ParameterValue, 'Show what the validator reads from a file')
+            [CompletionResult]::new('legibility', 'legibility', [CompletionResultType]::ParameterValue, 'Work out minimum text sizes for a viewing distance')
+            [CompletionResult]::new('dwell', 'dwell', [CompletionResultType]::ParameterValue, 'Work out what a driver can read of a sign at a speed')
+            [CompletionResult]::new('rule-packs', 'rule-packs', [CompletionResultType]::ParameterValue, 'List the built-in rule packs, or show one')
             [CompletionResult]::new('conformance', 'conformance', [CompletionResultType]::ParameterValue, 'Run the conformance suite against a validator')
             [CompletionResult]::new('completion', 'completion', [CompletionResultType]::ParameterValue, 'Print shell completions')
             [CompletionResult]::new('version', 'version', [CompletionResultType]::ParameterValue, 'Show the tool, spec and rule pack versions')
@@ -65,6 +70,52 @@ Register-ArgumentCompleter -Native -CommandName 'opencrs' -ScriptBlock {
             [CompletionResult]::new('--output', '--output', [CompletionResultType]::ParameterName, 'Save trusted documents under this directory')
             [CompletionResult]::new('--json', '--json', [CompletionResultType]::ParameterName, 'Print the result as JSON')
             [CompletionResult]::new('--allow-local-http', '--allow-local-http', [CompletionResultType]::ParameterName, 'Allow http:// and connections to localhost, for testing')
+            [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Show help (--help shows more)')
+            [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Show help (--help shows more)')
+            break
+        }
+        'opencrs;publisher' {
+            [CompletionResult]::new('--now', '--now', [CompletionResultType]::ParameterName, 'Check time, RFC 3339 (default: now)')
+            [CompletionResult]::new('--json', '--json', [CompletionResultType]::ParameterName, 'Print the result as JSON')
+            [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Show help (--help shows more)')
+            [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Show help (--help shows more)')
+            break
+        }
+        'opencrs;probe' {
+            [CompletionResult]::new('--json', '--json', [CompletionResultType]::ParameterName, 'Print the probes as a JSON array')
+            [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Show help (--help shows more)')
+            [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Show help (--help shows more)')
+            break
+        }
+        'opencrs;legibility' {
+            [CompletionResult]::new('--near', '--near', [CompletionResultType]::ParameterName, 'Nearest viewing distance, metres')
+            [CompletionResult]::new('--far', '--far', [CompletionResultType]::ParameterName, 'Farthest viewing distance, metres')
+            [CompletionResult]::new('--ratio', '--ratio', [CompletionResultType]::ParameterName, 'Text is legible at this multiple of its height (default 150)')
+            [CompletionResult]::new('--screen-width-mm', '--screen-width-mm', [CompletionResultType]::ParameterName, 'The screen''s width in millimetres, to give sizes in pixels')
+            [CompletionResult]::new('--screen-width-px', '--screen-width-px', [CompletionResultType]::ParameterName, 'The screen''s width in pixels, with --screen-width-mm')
+            [CompletionResult]::new('--dwell', '--dwell', [CompletionResultType]::ParameterName, 'Dwell time in seconds, to give a word limit')
+            [CompletionResult]::new('--rate', '--rate', [CompletionResultType]::ParameterName, 'Reading rate in words per second (default 2)')
+            [CompletionResult]::new('--json', '--json', [CompletionResultType]::ParameterName, 'Print the result as JSON')
+            [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Show help (--help shows more)')
+            [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Show help (--help shows more)')
+            break
+        }
+        'opencrs;dwell' {
+            [CompletionResult]::new('--speed', '--speed', [CompletionResultType]::ParameterName, 'The speed, km/h')
+            [CompletionResult]::new('--near', '--near', [CompletionResultType]::ParameterName, 'Nearest viewing distance, metres')
+            [CompletionResult]::new('--far', '--far', [CompletionResultType]::ParameterName, 'Farthest viewing distance, metres')
+            [CompletionResult]::new('--ratio', '--ratio', [CompletionResultType]::ParameterName, 'Text is legible at this multiple of its height (default 150)')
+            [CompletionResult]::new('--rate', '--rate', [CompletionResultType]::ParameterName, 'Reading rate in words per second (default 2)')
+            [CompletionResult]::new('--screen-width-mm', '--screen-width-mm', [CompletionResultType]::ParameterName, 'The screen''s width in millimetres, to give sizes in pixels')
+            [CompletionResult]::new('--screen-width-px', '--screen-width-px', [CompletionResultType]::ParameterName, 'The screen''s width in pixels, with --screen-width-mm')
+            [CompletionResult]::new('--pack', '--pack', [CompletionResultType]::ParameterName, 'Show this built-in rule pack''s limits at the speed, repeatable')
+            [CompletionResult]::new('--json', '--json', [CompletionResultType]::ParameterName, 'Print the result as JSON')
+            [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Show help (--help shows more)')
+            [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Show help (--help shows more)')
+            break
+        }
+        'opencrs;rule-packs' {
+            [CompletionResult]::new('--json', '--json', [CompletionResultType]::ParameterName, 'Print as JSON')
             [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Show help (--help shows more)')
             [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Show help (--help shows more)')
             break

@@ -1,5 +1,11 @@
+import gzip
+import http.server
 import json
+import shutil
+import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -288,3 +294,350 @@ def test_probe_bytes_and_probes_are_type_checked():
         opencrs.check([spec()], "{}", {"a": float("nan")})
     with pytest.raises(opencrs.OpenCRSError):
         opencrs.check([spec()], "{}", {"a": object()})
+
+
+# The calls that take plain data are compared with the WebAssembly build, the
+# same core as the browser and Go run: the results must be equal, not merely
+# alike. That needs Node, which the tests skip without.
+WASM_CALL = Path(__file__).with_name("wasm_call.mjs")
+needs_node = pytest.mark.skipif(
+    shutil.which("node") is None or not (ROOT / "opencrs.wasm").exists(),
+    reason="needs node and the repo's opencrs.wasm",
+)
+
+
+def via_wasm(op: str, request: object) -> object:
+    out = subprocess.run(
+        ["node", str(WASM_CALL), op],
+        input=json.dumps(request),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return json.loads(out.stdout)
+
+
+def test_every_operation_in_the_manifest_is_exported_and_nothing_else_is():
+    manifest = json.loads((ROOT / "parity" / "operations.json").read_text())
+    listed = set(manifest["helpers"]["python"])
+    for op, entry in manifest["operations"].items():
+        names = entry["python"]
+        if names is None:
+            assert f"python.{op}" in manifest["exceptions"], f"{op}: no name and no exception"
+            continue
+        assert names, f"{op}: python needs a list of names or null"
+        assert f"python.{op}" not in manifest["exceptions"], f"{op}: has names and an exception"
+        for name in names:
+            assert callable(getattr(opencrs, name, None)), f"{op}: python has no {name}"
+            listed.add(name)
+    assert set(opencrs.__all__) == listed, "an export is missing from the manifest"
+
+
+def test_legibility_is_the_specs_worked_example():
+    res = opencrs.legibility([2, 6], screen={"width_mm": 940, "width_px": 1080}, dwell_s=4)
+    assert res["ratio"] == 150
+    assert res["key"] == {"mm": 40, "px": 46, "px_exact": 45.96, "basis": "at 6 m, ratio 150"}
+    assert res["legal"] == {"mm": 13.3, "px": 16, "px_exact": 15.32, "basis": "at 2 m, ratio 150"}
+    assert res["words"] == {"value": 8, "basis": "4 s dwell at 2 words/s"}
+    assert "px" not in opencrs.legibility((3, 10), ratio=250)["key"]
+
+
+@needs_node
+def test_legibility_equals_the_webassembly_build():
+    for kwargs, req in [
+        (
+            {"screen": {"width_mm": 940, "width_px": 1080}, "dwell_s": 4},
+            {"distance_m": [2, 6], "screen": {"width_mm": 940, "width_px": 1080}, "dwell_s": 4},
+        ),
+        ({"ratio": 250}, {"distance_m": [2, 6], "ratio": 250}),
+        ({"rate": 3, "dwell_s": 2.5}, {"distance_m": [2, 6], "rate": 3, "dwell_s": 2.5}),
+    ]:
+        assert opencrs.legibility([2, 6], **kwargs) == via_wasm("legibility", req)
+
+
+def test_legibility_errors_raise_with_the_cores_message():
+    with pytest.raises(opencrs.OpenCRSError, match=r"the near distance \(6 m\) is past the far one \(2 m\)"):
+        opencrs.legibility([6, 2])
+    with pytest.raises(opencrs.OpenCRSError, match="ratio must be a number above zero"):
+        opencrs.legibility([2, 6], ratio=0)
+    with pytest.raises(opencrs.OpenCRSError, match="distance_m must be"):
+        opencrs.legibility([2])
+    with pytest.raises(opencrs.OpenCRSError, match="screen must be"):
+        opencrs.legibility([2, 6], screen={"width_mm": 940})
+
+
+def test_dwell_gives_the_glance_and_each_packs_limits():
+    res = opencrs.dwell(80, [20, 150], rule_packs=["au-nsw-transport-corridor@2017-11"])
+    assert res["glance"]["words"] == 4
+    assert res["glance"]["read_from_m"] == 64.44
+    assert res["key"]["mm"] == 429.6
+    assert res["packs"][0]["min_dwell_s"] == 25
+    assert res["packs"][0]["motion_allowed"] is False
+    with pytest.raises(opencrs.OpenCRSError, match=r"unknown rule pack x@1"):
+        opencrs.dwell(80, [20, 150], rule_packs=["x@1"])
+
+
+@needs_node
+def test_dwell_equals_the_webassembly_build():
+    packs = ["au-nsw-transport-corridor@2017-11"]
+    assert opencrs.dwell(80, [20, 150], rule_packs=packs) == via_wasm(
+        "dwell", {"speed_kmh": 80, "distance_m": [20, 150], "rule_packs": packs}
+    )
+    screen = {"width_mm": 940, "width_px": 1080}
+    assert opencrs.dwell(60, [20, 150], screen=screen, ratio=200, rate=3) == via_wasm(
+        "dwell",
+        {"speed_kmh": 60, "distance_m": [20, 150], "screen": screen, "ratio": 200, "rate": 3},
+    )
+
+
+def test_rule_packs_lists_the_built_in_packs():
+    res = opencrs.rule_packs()
+    assert len(res["rule_packs"]) == 6
+    assert all(p["ref"] and p["title"] and p["status"] for p in res["rule_packs"])
+    assert [p["ref"] for p in res["rule_packs"]] == sorted(p["ref"] for p in res["rule_packs"])
+
+
+@needs_node
+def test_rule_packs_equals_the_webassembly_build():
+    assert opencrs.rule_packs() == via_wasm("rule_packs", {})
+
+
+INDEX_URL = "https://harbourline.example/.well-known/opencrs.json"
+DOC_URL = "https://harbourline.example/opencrs/retail.screens.json"
+SERVED = {"cache_control": "max-age=60", "etag": '"v1"', "content_type": "application/json"}
+
+
+def index() -> str:
+    return (HARBOURLINE / ".well-known" / "opencrs.json").read_text()
+
+
+def test_publisher_asks_for_the_index_then_checks_what_it_is_given():
+    first = opencrs.publisher("harbourline.example", {}, NOW)
+    assert first["wanted"] == [INDEX_URL]
+    assert first["wanted_detail"] == [{"url": INDEX_URL, "kind": "index", "same_host": True}]
+
+    pages = {
+        INDEX_URL: {"status": 200, "body": index(), **SERVED},
+        DOC_URL: {"status": 200, "body": spec().encode(), **SERVED, "allow_origin": "*"},
+    }
+    res = opencrs.publisher("harbourline.example", pages, NOW)
+    assert res["wanted"] == []
+    assert res["errors"] == 0
+    [doc] = res["discovery"]["documents"]
+    assert (doc["status"], doc["screens"]) == ("trusted", 3)
+
+    part = {INDEX_URL: pages[INDEX_URL]}
+    missing = opencrs.publisher("harbourline.example", part, NOW, "skipped for now")
+    assert missing["wanted"] == [DOC_URL]
+    assert "skipped for now" in missing["discovery"]["documents"][0]["reason"]
+    broke = {**part, DOC_URL: {"status": 0, "error": "connection reset"}}
+    reason = opencrs.publisher("harbourline.example", broke, NOW)["discovery"]["documents"][0]["reason"]
+    assert "connection reset" in reason
+
+
+@needs_node
+def test_publisher_equals_the_webassembly_build():
+    pages = {
+        INDEX_URL: {"status": 200, "body": index(), **SERVED},
+        DOC_URL: {"status": 200, "body": spec(), **SERVED, "allow_origin": "*"},
+    }
+    bare = {INDEX_URL: {"status": 200, "body": index()}, DOC_URL: {"status": 200, "body": spec()}}
+    part = {INDEX_URL: pages[INDEX_URL]}
+    gone = {**part, DOC_URL: {"status": 404}}
+    for given, missing in [({}, None), (pages, None), (bare, None), (part, "skipped for now"), (gone, None)]:
+        req = {"domain": "harbourline.example", "pages": given, "now": NOW, "missing": missing or ""}
+        assert opencrs.publisher("harbourline.example", given, NOW, missing) == via_wasm("publisher", req)
+    # Bodies given as bytes are the same as the text.
+    as_bytes = {u: {**p, "body": p["body"].encode()} for u, p in pages.items()}
+    assert opencrs.publisher("harbourline.example", as_bytes, NOW) == opencrs.publisher(
+        "harbourline.example", pages, NOW
+    )
+
+
+def test_publisher_advice_is_about_how_the_files_were_served():
+    bare = {INDEX_URL: {"status": 200, "body": index()}, DOC_URL: {"status": 200, "body": spec()}}
+    res = opencrs.publisher("harbourline.example", bare, NOW)
+    assert res["warnings"] >= 2
+    assert any(a["url"] == DOC_URL and "Cache-Control" in a["message"] for a in res["advice"])
+    # Not UTF-8: arrives as it is, and is not an index.
+    bad = opencrs.publisher("harbourline.example", {INDEX_URL: {"status": 200, "body": b"<\xff"}}, NOW)
+    assert bad["errors"] == 1 and bad["error"]
+
+
+def test_publisher_raises_for_bad_arguments():
+    with pytest.raises(opencrs.OpenCRSError, match="not an RFC 3339 time"):
+        opencrs.publisher("harbourline.example", {}, "yesterday")
+    with pytest.raises(TypeError):
+        opencrs.publisher("harbourline.example", {INDEX_URL: {"status": 200, "body": 5}})
+
+
+def test_fetch_publisher_says_what_the_check_says_of_a_domain_that_cannot_publish():
+    res = opencrs.fetch_publisher("not a domain", now=NOW)
+    assert "isn't a publisher domain" in res["error"]
+    assert res["errors"] == 1
+    assert res == opencrs.publisher("not a domain", {}, NOW)
+    # Local names can't publish either, so a loopback server can't be pointed at.
+    assert "isn't a publisher domain" in opencrs.fetch_publisher("localhost")["error"]
+    assert "isn't a publisher domain" in opencrs.fetch_publisher("127.0.0.1:1")["error"]
+    with pytest.raises(opencrs.OpenCRSError, match="not an RFC 3339 time"):
+        opencrs.fetch_publisher("harbourline.example", now="later")
+    with pytest.raises(opencrs.OpenCRSError, match="timeout"):
+        opencrs.fetch_publisher("harbourline.example", timeout=-1)
+
+
+@needs_node
+def test_fetch_publisher_equals_the_webassembly_build_for_a_failed_index():
+    req = {"domain": "not a domain", "pages": {}, "now": NOW, "missing": ""}
+    assert opencrs.fetch_publisher("not a domain", now=NOW) == via_wasm("publisher", req)
+
+
+class Local:
+    """A publisher on a local port, answering by path."""
+
+    def __init__(self, handler):
+        self.seen = []
+        outer = self
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                outer.seen.append(self.path)
+                status, headers, body = handler(self.path, outer.addr)
+                self.send_response(status)
+                for k, v in headers.items():
+                    self.send_header(k, v)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+        self.addr = f"127.0.0.1:{self.server.server_address[1]}"
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.server.shutdown()
+        self.server.server_close()
+
+
+def test_discover_reads_a_local_publisher_and_lets_other_threads_run():
+    doc = spec().encode()
+
+    def handler(path, addr):
+        if path == "/.well-known/opencrs.json":
+            body = json.dumps(
+                {
+                    "opencrs": "0.1",
+                    "publisher": {"id": "harbourline.example", "name": "Harbourline"},
+                    "documents": [
+                        {"url": f"http://{addr}/retail.screens.json", "network": "retail"},
+                        {"url": f"http://{addr}/slow.screens.json", "network": "retail"},
+                        {"url": f"http://{addr}/metadata.screens.json", "network": "retail"},
+                    ],
+                }
+            ).encode()
+            return 200, {"Content-Type": "application/json"}, body
+        if path == "/retail.screens.json":
+            return 200, {"Content-Encoding": "gzip", "Cache-Control": "max-age=3600"}, gzip.compress(doc)
+        if path == "/slow.screens.json":
+            time.sleep(0.4)
+            return 200, {}, doc
+        if path == "/metadata.screens.json":
+            return 302, {"Location": "https://169.254.169.254/latest/meta-data/"}, b""
+        return 404, {}, b""
+
+    with Local(handler) as srv:
+        ticks = 0
+        stop = threading.Event()
+
+        def count():
+            nonlocal ticks
+            while not stop.is_set():
+                ticks += 1
+                time.sleep(0.01)
+
+        t = threading.Thread(target=count)
+        t.start()
+        try:
+            res = opencrs.discover(srv.addr, unsafe_allow_local_http=True, now=NOW)
+        finally:
+            stop.set()
+            t.join()
+        assert ticks >= 5, f"another thread ran only {ticks} times in 400 ms: the GIL was held"
+        assert res["index"]["publisher"]["name"] == "Harbourline"
+        by = {d["url"].rsplit("/", 1)[1]: d for d in res["documents"]}
+        assert by["retail.screens.json"]["status"] == "trusted"
+        assert by["retail.screens.json"]["screens"] == 3, "the gzipped body was read"
+        assert by["retail.screens.json"]["cache_control"] == "max-age=3600"
+        assert by["slow.screens.json"]["status"] == "trusted"
+        # A redirect to a cloud metadata address is refused, and nothing is sent there.
+        assert by["metadata.screens.json"]["status"] == "failed"
+        assert "refusing to connect to 169.254.169.254" in by["metadata.screens.json"]["reason"]
+        # Without local testing, the local address isn't a publisher at all.
+        with pytest.raises(opencrs.OpenCRSError, match="isn't a publisher domain"):
+            opencrs.discover(srv.addr, now=NOW)
+        assert "/.well-known/opencrs.json" in srv.seen
+    # An index that can't be fetched raises.
+    with pytest.raises(opencrs.OpenCRSError):
+        opencrs.discover("127.0.0.1:1", unsafe_allow_local_http=True)
+
+
+def test_huge_or_odd_numbers_in_options_are_clamped_or_errors_not_panics():
+    # Clamped: these ask for more than allowed, which is the most allowed.
+    res = opencrs.fetch_publisher(
+        "not a domain",
+        max_document_bytes=2**64 - 1,
+        max_total_bytes=10**30,
+        max_rounds=2**64 - 1,
+        max_pages=10**30,
+        timeout=1e300,
+        total_timeout=1e300,
+        now=NOW,
+    )
+    assert "isn't a publisher domain" in res["error"]
+    # Errors, as ValueError: not numbers of seconds, or negative.
+    for bad in (float("nan"), float("inf"), -1.0):
+        with pytest.raises(opencrs.OpenCRSError, match="number of seconds"):
+            opencrs.fetch_publisher("not a domain", timeout=bad)
+        with pytest.raises(ValueError, match="number of seconds"):
+            opencrs.fetch_publisher("not a domain", total_timeout=bad)
+        with pytest.raises(opencrs.OpenCRSError, match="number of seconds"):
+            opencrs.discover("not a domain", timeout=bad)
+    for name in ("max_document_bytes", "max_total_bytes", "max_rounds", "max_pages"):
+        with pytest.raises(opencrs.OpenCRSError, match="zero or more"):
+            opencrs.fetch_publisher("not a domain", **{name: -1})
+
+
+def test_the_total_time_limit_stops_a_publisher_that_never_finishes():
+    class Drip(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Length", "100000000")
+            self.end_headers()
+            try:
+                while True:
+                    self.wfile.write(b" ")
+                    self.wfile.flush()
+                    time.sleep(0.02)
+            except OSError:
+                pass
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Drip)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    addr = f"127.0.0.1:{server.server_address[1]}"
+    try:
+        t = time.monotonic()
+        with pytest.raises(opencrs.OpenCRSError, match="time limit for the whole check"):
+            opencrs.discover(addr, unsafe_allow_local_http=True, total_timeout=0.5, now=NOW)
+        took = time.monotonic() - t
+        assert 0.4 <= took < 3, f"took {took:.2f} s"
+    finally:
+        server.shutdown()
+        server.server_close()

@@ -73,7 +73,7 @@ pub trait Fetcher {
 }
 
 /// `localhost`, `127.0.0.1` or `[::1]`, with an optional `:port`.
-pub(crate) fn is_local_host(s: &str) -> bool {
+pub fn is_local_host(s: &str) -> bool {
     for h in ["localhost", "127.0.0.1", "[::1]"] {
         if let Some(rest) = s.strip_prefix(h) {
             return match rest.strip_prefix(':') {

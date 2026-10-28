@@ -1,7 +1,8 @@
 # @opencrs/opencrs
 
 Node.js bindings for the OpenCRS core (Rust, via napi-rs): lint documents,
-probe creative files, and resolve screen requirements. OpenCRS is the Open
+probe creative files, resolve screen requirements, work out legibility and
+dwell, and check a publisher's published specs. OpenCRS is the Open
 Creative Requirements Specification: https://opencrs.dev
 
 Early work: the API may change before 1.0.
@@ -26,9 +27,44 @@ opencrs.resolveStrictest(spec, "publisher.example/network/format"); // one Stric
 opencrs.check([spec], manifest, { "a.png": probe }); // { reports, notes }
 opencrs.checkDir(dir, [spec], manifest); // { reports, notes, missing }: probes the manifest's files in dir
 opencrs.probe("creative.png"); // { sha256, bytes, media_type, pixels? }
+
+// Minimum text sizes, and what a driver can read, as the checks work them out.
+opencrs.legibility({ distance_m: [2, 6], screen: { width_mm: 940, width_px: 1080 } }).key.px; // 46
+opencrs.dwell({ speed_kmh: 80, distance_m: [20, 150], rule_packs: ["au-nsw-transport-corridor@2017-11"] }).glance.words; // 4
+opencrs.rulePacks(); // { rule_packs: [{ ref, title, status, source_url? }, ...] }
+
+// Check a publisher's specs from pages you fetched, or let it fetch them.
+opencrs.publisher("harbourline.example", pages); // { errors, warnings, advice, wanted, ... }
+await opencrs.fetchPublisher("harbourline.example"); // the same result, after fetching
+await opencrs.discover("harbourline.example"); // which documents to trust, as `opencrs fetch` says
 ```
 
-Errors from the core are thrown as `Error` with the core's message.
+Errors from the core are thrown as `Error` with the core's message. The
+calculators, `rulePacks` and `publisher` give the same objects as the browser
+build (`js/opencrs.js`) and Go for the same input, so `rulePacks()` has its
+list under `rule_packs`.
+
+## Fetching a publisher
+
+`publisher(domain, pages)` takes pages you have fetched, keyed by URL (`{ status,
+body, etag?, cache_control?, ... }`, with a string or bytes `body`); its `wanted`
+lists the URLs it still needs. `fetchPublisher(domain, options?)` runs that loop
+for you and returns a Promise, off the event loop. The publisher chose every URL,
+so it fetches as carefully as the `opencrs` command line does: HTTPS only, no
+connection to a loopback, private, link-local or other non-public address
+(checked after DNS and on every redirect), no proxy, and caps on the size and
+number of pages (`maxDocumentBytes`, `maxTotalBytes`, `maxRounds`, `maxPages`,
+`timeoutMs`), and the whole call is held to `totalTimeoutMs` (five minutes by
+default, at most an hour): a request never runs past it, and a URL not fetched
+by then is reported as not fetched. Pass `signal` (an `AbortSignal`) to stop a
+call early; it rejects with the signal's reason. Each call runs on a thread of
+its own, so a few slow publishers cannot starve `fs`, `dns` or `zlib`.
+
+`discover(domain, options?)` gives only the trust decisions. For testing only,
+`unsafeAllowLocalHttp: true` lets a publisher that is itself on `localhost`,
+`127.0.0.1` or `[::1]` use `http://` and reach localhost; a public publisher
+gets nothing from it. Do not set it in code that checks publishers other people
+name.
 
 ## Develop
 

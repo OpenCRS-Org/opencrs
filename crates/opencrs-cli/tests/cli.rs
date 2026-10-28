@@ -622,3 +622,314 @@ fn unreadable_creative_file_keeps_gos_wording() {
         )
     );
 }
+
+#[test]
+fn probe_command() {
+    let a = ex("lunch-portrait.png");
+    let b = ex("lunch-portrait-logo-right.png");
+    let (code, out, err) = run_cli(&["probe", &a, &b]);
+    assert_eq!(code, 0, "{err}");
+    let want = opencrs::fs::probe_path(std::path::Path::new(&a)).unwrap();
+    for line in [
+        a.clone(),
+        "  type      image/png".to_string(),
+        "  pixels    1080 x 1920".to_string(),
+        format!("  bytes     {}", want.bytes),
+        format!("  sha256    {}", want.sha256),
+        b.clone(),
+    ] {
+        assert!(out.contains(&line), "missing {line:?} in:\n{out}");
+    }
+    assert!(err.is_empty());
+
+    let (code, out, _) = run_cli(&["probe", "--json", &a, &b]);
+    assert_eq!(code, 0);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v.as_array().unwrap().len(), 2);
+    assert_eq!(v[0]["file"], a.as_str());
+    assert_eq!(v[0]["sha256"], want.sha256.as_str());
+    assert_eq!(v[0]["bytes"], want.bytes);
+    assert_eq!(v[0]["media_type"], "image/png");
+    assert_eq!(v[0]["pixels"], serde_json::json!([1080, 1920]));
+}
+
+#[test]
+fn probe_reports_unreadable_files_and_unknown_types() {
+    let dir = tempfile::tempdir().unwrap();
+    let blob = dir.path().join("blob.bin");
+    std::fs::write(&blob, b"not a known type").unwrap();
+    let blob = blob.to_str().unwrap();
+    let missing = dir.path().join("nope.png");
+    let missing = missing.to_str().unwrap();
+
+    let (code, out, err) = run_cli(&["probe", missing, blob]);
+    assert_eq!(code, 2);
+    assert!(err.starts_with(&format!("{missing}: ")), "{err}");
+    assert!(
+        out.contains("  type      unknown") && out.contains("  bytes     16"),
+        "{out}"
+    );
+    assert!(!out.contains("pixels"), "{out}");
+    // The file that could be read is still in the JSON.
+    let (code, out, _) = run_cli(&["probe", "--json", missing, blob]);
+    assert_eq!(code, 2);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v.as_array().unwrap().len(), 1);
+    assert_eq!(v[0]["file"], blob);
+    let (code, _, err) = run_cli(&["probe"]);
+    assert_eq!(code, 2, "{err}");
+}
+
+#[test]
+fn legibility_command() {
+    let (code, out, err) = run_cli(&[
+        "legibility",
+        "--near",
+        "2",
+        "--far",
+        "6",
+        "--screen-width-mm",
+        "940",
+        "--screen-width-px",
+        "1080",
+        "--dwell",
+        "4",
+    ]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        out,
+        "Text seen from 2 m to 6 m, legible at 150 times its height\n\
+         \x20 key text    40 mm, 46 px  (at 6 m, ratio 150)\n\
+         \x20 legal text  13.3 mm, 16 px  (at 2 m, ratio 150)\n\
+         \x20 word limit  8 words  (4 s dwell at 2 words/s)\n"
+    );
+    let (code, out, _) = run_cli(&[
+        "legibility",
+        "--near",
+        "2",
+        "--far",
+        "6",
+        "--screen-width-mm",
+        "940",
+        "--screen-width-px",
+        "1080",
+        "--dwell",
+        "4",
+        "--json",
+    ]);
+    assert_eq!(code, 0);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["ratio"], 150);
+    assert_eq!(v["key"]["px"], 46);
+    assert_eq!(v["key"]["px_exact"], 45.96);
+    assert_eq!(v["legal"]["px"], 16);
+    assert_eq!(v["words"]["value"], 8);
+    // Without a screen or a dwell: millimetres only.
+    let (_, out, _) = run_cli(&[
+        "legibility",
+        "--near",
+        "3",
+        "--far",
+        "10",
+        "--ratio",
+        "250",
+        "--json",
+    ]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["key"]["mm"], 40);
+    assert!(v["key"].get("px").is_none() && v.get("words").is_none());
+    // The Go-style single dash still works.
+    let (code, _, _) = run_cli(&["legibility", "-near", "2", "-far", "6"]);
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn legibility_and_dwell_inputs_that_make_no_sense_are_usage_errors() {
+    let (code, _, err) = run_cli(&["legibility", "--near", "6", "--far", "2"]);
+    assert_eq!(code, 2);
+    assert_eq!(
+        err,
+        "opencrs legibility: the near distance (6 m) is past the far one (2 m)\n"
+    );
+    for args in [
+        vec!["legibility", "--near", "2"],
+        vec![
+            "legibility",
+            "--near",
+            "2",
+            "--far",
+            "6",
+            "--screen-width-mm",
+            "940",
+        ],
+        vec!["legibility", "--near", "2", "--far", "6", "--ratio", "x"],
+        vec!["dwell", "--near", "20", "--far", "150"],
+    ] {
+        let (code, _, err) = run_cli(&args);
+        assert_eq!(code, 2, "{args:?}: {err}");
+    }
+    let (code, _, err) = run_cli(&["legibility", "--near", "2", "--far", "6", "--ratio", "0"]);
+    assert!(
+        code == 2 && err.contains("ratio must be a number above zero"),
+        "{err}"
+    );
+    let (code, _, err) = run_cli(&["dwell", "--speed", "-5", "--near", "20", "--far", "150"]);
+    assert!(code == 2 && err.contains("the speed must be"), "{err}");
+    let (code, _, err) = run_cli(&[
+        "dwell", "--speed", "80", "--near", "20", "--far", "150", "--pack", "x@1",
+    ]);
+    assert_eq!(code, 2);
+    assert_eq!(err, "opencrs dwell: unknown rule pack x@1\n");
+}
+
+#[test]
+fn dwell_command() {
+    let pack = "au-nsw-transport-corridor@2017-11";
+    let (code, out, err) = run_cli(&[
+        "dwell", "--speed", "80", "--near", "20", "--far", "150", "--pack", pack,
+    ]);
+    assert_eq!(code, 0, "{err}");
+    for want in [
+        "At 80 km/h (22.22 m/s), seen from 20 m to 150 m: 5.85 s to cross",
+        "  glance      2 s, 4 words, reading from 64.44 m",
+        "  key text    429.6 mm  (to read from 64 m, the start of a 2 s glance at 80 km/h (ratio 150))",
+        "au-nsw-transport-corridor@2017-11 (draft): NSW digital signs in transport corridors",
+        "  min dwell       25 s (at 80 km/h and over)",
+        "  max transition  0.1 s",
+        "  motion          not allowed",
+        "  failure state   black",
+    ] {
+        assert!(out.contains(want), "missing {want:?} in:\n{out}");
+    }
+    let (code, out, _) = run_cli(&[
+        "dwell", "--speed", "60", "--near", "20", "--far", "150", "--pack", pack, "--json",
+    ]);
+    assert_eq!(code, 0);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["glance"]["words"], 4);
+    assert_eq!(v["packs"][0]["ref"], pack);
+    assert_eq!(v["packs"][0]["min_dwell_s"], 10);
+    assert_eq!(v["packs"][0]["dwell_basis"], "below 80 km/h");
+}
+
+#[test]
+fn rule_packs_command() {
+    let (code, out, _) = run_cli(&["rule-packs"]);
+    assert_eq!(code, 0);
+    assert_eq!(out.lines().count(), 6, "{out}");
+    let line = out
+        .lines()
+        .find(|l| l.starts_with("au-nsw-transport-corridor@2017-11"))
+        .unwrap();
+    assert!(line.contains("  draft  "), "{line}");
+    assert!(
+        line.ends_with("NSW digital signs in transport corridors"),
+        "{line}"
+    );
+    assert!(out.contains("au-tas-spp-signs-code@2024-06"), "{out}");
+
+    let (code, out, _) = run_cli(&["rule-packs", "--json"]);
+    assert_eq!(code, 0);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let packs = v["rule_packs"].as_array().unwrap();
+    assert_eq!(packs.len(), 6);
+    assert!(
+        packs
+            .iter()
+            .all(|p| p["ref"].is_string() && p["status"].is_string())
+    );
+
+    let pack = "au-nsw-transport-corridor@2017-11";
+    let (code, out, _) = run_cli(&["rule-packs", pack]);
+    assert_eq!(code, 0);
+    for want in [
+        "min dwell       10 s below 80 km/h; 25 s at 80 km/h and over",
+        "max transition  0.1 s",
+        "failure state   black",
+        "day       zone_1 no limit, zone_2 6000, zone_3 6000, zone_4 6000",
+    ] {
+        assert!(out.contains(want), "missing {want:?} in:\n{out}");
+    }
+    // The pack as the document it is.
+    let (code, out, _) = run_cli(&["rule-packs", "--json", pack]);
+    assert_eq!(code, 0);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let file = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../rulepacks")
+        .join(format!("{pack}.json"));
+    let want: serde_json::Value = serde_json::from_slice(&std::fs::read(file).unwrap()).unwrap();
+    for key in [
+        "rule_pack",
+        "version",
+        "title",
+        "source_url",
+        "playback",
+        "creative",
+    ] {
+        assert_eq!(v[key], want[key], "{key}");
+    }
+
+    let (code, _, err) = run_cli(&["rule-packs", "x@1"]);
+    assert_eq!(code, 1);
+    assert!(
+        err.starts_with("opencrs rule-packs: no built-in rule pack x@1; known: au-nsw"),
+        "{err}"
+    );
+}
+
+/// The publisher check's fetching is tested in opencrs-fetch, which has the
+/// loop and the refusals; here, what the command does with its answers.
+#[test]
+fn publisher_command_without_a_publisher() {
+    let (code, out, err) = run_cli(&["publisher", "not a domain", "--now", "2026-10-25T12:00:00Z"]);
+    assert_eq!(code, 2);
+    assert_eq!(out, "");
+    assert!(err.contains("isn't a publisher domain"), "{err}");
+    let (code, out, _) = run_cli(&["publisher", "--json", "localhost"]);
+    assert_eq!(code, 2);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["errors"], 1);
+    assert!(
+        v["error"]
+            .as_str()
+            .unwrap()
+            .contains("isn't a publisher domain")
+    );
+    assert_eq!(v["wanted"], serde_json::json!([]));
+    let (code, _, err) = run_cli(&["publisher", "x.example", "--now", "later"]);
+    assert!(code == 2 && err.contains("not an RFC 3339 time"), "{err}");
+    let (code, _, _) = run_cli(&["publisher"]);
+    assert_eq!(code, 2);
+}
+
+/// A publisher's own text can't send a terminal escape sequences through
+/// `fetch`; the JSON form is already escaped.
+#[test]
+fn fetch_shows_control_characters_in_a_publishers_text() {
+    let srv = Server::start(move |r, addr| match r.path.as_str() {
+        "/.well-known/opencrs.json" => Resp::ok(format!(
+            r#"{{"opencrs":"0.1","publisher":{{"id":"harbourline.example","name":"Harb\u001b]0;pwned\u0007\u001b[2Jline"}},
+		  "documents":[{{"url":"http://{addr}/retail.screens.json","network":"retail"}}]}}"#
+        )),
+        _ => Resp::status(404),
+    });
+    let (code, out, err) = run_cli(&["fetch", "-allow-local-http", &srv.addr]);
+    assert_eq!(code, 1, "{err}");
+    assert!(
+        !out.contains('\u{1b}') && !out.contains('\u{7}'),
+        "raw controls in {out:?}"
+    );
+    assert!(
+        out.contains("Harb\\u001b]0;pwned\\u0007\\u001b[2Jline"),
+        "{out:?}"
+    );
+    let (_, out, _) = run_cli(&["fetch", "-allow-local-http", "--json", &srv.addr]);
+    assert!(!out.contains('\u{1b}'), "{out:?}");
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert!(
+        v["result"]["index"]["publisher"]["name"]
+            .as_str()
+            .unwrap()
+            .contains('\u{1b}')
+    );
+}

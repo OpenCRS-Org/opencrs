@@ -22,10 +22,8 @@ opencrs = { path = "../opencrs", features = ["fs", "parallel"] }
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "alloc"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# rustls with ring (no OpenSSL, builds on musl); trust the system store like Go.
-# "~3.5": the custom resolver uses ureq::unversioned, which may change in a
-# minor release.
-ureq = { version = "~3.5", features = ["platform-verifier"] }
+# The SSRF-safe HTTP client, shared with the Node and Python bindings.
+opencrs-fetch = { path = "../opencrs-fetch" }
 url = "2.5.8"
 clap = { version = "4.6.7", features = ["derive", "std", "help", "usage", "error-context", "suggestions", "color"] }
 clap_complete = "4.6.11"
