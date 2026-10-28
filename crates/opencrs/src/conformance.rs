@@ -287,6 +287,7 @@ mod tests {
                     severity: "error".into(),
                     element: "legal".into(),
                     screens: vec!["S2".into()],
+                    screens_total: 0,
                 }],
             }],
             ..Default::default()

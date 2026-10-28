@@ -394,7 +394,7 @@ fn conformance_passes_full_level() {
     assert_eq!(code, 0, "{out}{err}");
     assert_eq!(
         out,
-        "the reference validator conforms at the Full level: 47 of 47 cases pass\n"
+        "the reference validator conforms at the Full level: 48 of 48 cases pass\n"
     );
     let (code, out, _) = run_cli(&["conformance", "-level", "core", "-v", dir.to_str().unwrap()]);
     assert_eq!(code, 0);
@@ -460,7 +460,7 @@ fn conformance_reports_failing_cases() {
     assert!(out.contains("\n      "), "{out}");
     assert!(
         out.ends_with(
-            "the reference validator does not conform at the Full level: 46 of 47 cases pass\n"
+            "the reference validator does not conform at the Full level: 47 of 48 cases pass\n"
         ),
         "{out}"
     );
