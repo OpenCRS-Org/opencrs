@@ -22,6 +22,16 @@ pub const MAX_INDEX_ENTRIES: usize = 1000;
 /// ten documents at the spec's 50 MiB limit, or a hundred the size of a
 /// 20,000-screen network.
 pub const MAX_RUN_BYTES: usize = 512 << 20;
+
+/// The most URLs one discovery asks for, indexes and documents together,
+/// however many an index lists. A publisher chooses every URL a check
+/// fetches, so without a limit one index could aim a check at a victim a
+/// million times. The same limit applies to the CLI's `fetch`.
+pub const MAX_FETCHES_PER_RUN: usize = 2000;
+
+/// The most documents read from one delegate's index. A delegate is
+/// another party's domain, so it gets a smaller share than the publisher.
+pub const MAX_DOCUMENTS_PER_DELEGATE: usize = 250;
 pub use merge::merge;
 
 use crate::error::Error;
@@ -160,6 +170,10 @@ pub struct DiscoveryResult {
     pub documents: Vec<DiscoveredDocument>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub delegates: Vec<DelegateResult>,
+    /// Where discovery stopped short of what the indexes list, and why: a
+    /// safeguard of this validator, not a fault in the publisher's files.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub limits: Vec<String>,
 }
 
 impl DiscoveryResult {
@@ -191,12 +205,21 @@ pub struct Options {
     /// The most bytes one discovery reads; zero means [`MAX_RUN_BYTES`].
     /// Documents past it are `failed`.
     pub max_run_bytes: usize,
+    /// The most URLs one discovery asks for; zero means
+    /// [`MAX_FETCHES_PER_RUN`]. Ones past it are not fetched, and the
+    /// result's `limits` says so.
+    pub max_fetches: usize,
+    /// Keep each trusted document's bytes in the result (`raw`). A caller
+    /// that already holds them can leave this off and save a copy.
+    pub keep_raw: bool,
 }
 
-/// What's left of a discovery's byte allowance.
+/// What's left of a discovery's byte and fetch allowances.
 struct Budget {
     limit: usize,
     used: std::cell::Cell<usize>,
+    max_fetches: usize,
+    fetches: std::cell::Cell<usize>,
 }
 
 impl Budget {
@@ -208,7 +231,29 @@ impl Budget {
                 opt.max_run_bytes
             },
             used: std::cell::Cell::new(0),
+            max_fetches: if opt.max_fetches == 0 {
+                MAX_FETCHES_PER_RUN
+            } else {
+                opt.max_fetches
+            },
+            fetches: std::cell::Cell::new(0),
         }
+    }
+
+    /// Counts one more URL to fetch; false if that passes the limit.
+    fn fetch_ok(&self) -> bool {
+        if self.fetches.get() >= self.max_fetches {
+            return false;
+        }
+        self.fetches.set(self.fetches.get() + 1);
+        true
+    }
+
+    fn fetch_refusal(&self) -> String {
+        format!(
+            "not fetched: a check asks for at most {} URLs",
+            self.max_fetches
+        )
     }
 
     fn spent(&self) -> bool {
@@ -247,9 +292,60 @@ pub fn is_domain(s: &str) -> bool {
     labels >= 2
 }
 
+/// Whether `s` is a DNS name that can belong to a publisher: a domain by
+/// [`is_domain`] whose last label isn't all digits (so `10.0.0.5` is an
+/// address, not a name) and which isn't one of the names reserved for the
+/// local machine or network.
+pub fn is_dns_name(s: &str) -> bool {
+    is_domain(s)
+        && s.rsplit('.')
+            .next()
+            .is_some_and(|tld| tld.bytes().any(|b| b.is_ascii_lowercase()))
+        && !reserved_name(s)
+}
+
+fn reserved_name(s: &str) -> bool {
+    let s = s.trim_end_matches('.');
+    s == "localhost"
+        || [".localhost", ".local", ".internal", ".localdomain"]
+            .iter()
+            .any(|suffix| s.ends_with(suffix))
+}
+
 /// A domain, or in local testing mode a local host and port.
 fn may_publish(s: &str, opt: &Options) -> bool {
-    is_domain(s) || (opt.allow_local_http && is_local_host(s))
+    is_dns_name(s) || (opt.allow_local_http && is_local_host(s))
+}
+
+/// Why a listed document's URL must not be fetched, if it mustn't. A
+/// publisher chooses these URLs, so one that points a fetcher at an address
+/// or a local-only name, or carries a user name and password, is rejected
+/// without a request. (Where a name resolves is the fetcher's to check.)
+fn unfetchable(url: &str, opt: &Options) -> Option<String> {
+    let Ok(u) = url::Url::parse(url) else {
+        return Some("not a valid URL".to_string());
+    };
+    if !u.username().is_empty() || u.password().is_some() {
+        return Some("the URL has a user name or password in it".to_string());
+    }
+    let host = u.host_str().unwrap_or("");
+    let at = match u.port() {
+        Some(p) => format!("{host}:{p}"),
+        None => host.to_string(),
+    };
+    if opt.allow_local_http && is_local_host(&at) {
+        return None;
+    }
+    match u.host() {
+        Some(url::Host::Domain(d)) if !reserved_name(d) => None,
+        Some(url::Host::Domain(_)) => {
+            Some("the URL is at a name that only the local machine or network knows".to_string())
+        }
+        _ => Some(
+            "the URL is at an IP address; documents must be at a host name, as the publisher's domain is what vouches for them"
+                .to_string(),
+        ),
+    }
 }
 
 /// Where a domain's index lives.
@@ -297,18 +393,34 @@ pub fn discover(
         index: idx.clone(),
         documents: Vec::new(),
         delegates: Vec::new(),
+        limits: Vec::new(),
     };
 
-    for e in &idx.documents {
-        let (mut d, undecided) = fetch_document(e, &domain, token(&domain), fetcher, &budget);
+    for (i, e) in idx.documents.iter().enumerate() {
+        // The host may be asking this call to stop.
+        if crate::budget::checkpoint() {
+            return Ok(res);
+        }
+        if !budget.fetch_ok() {
+            res.limits.push(format!(
+                "{domain}'s index lists {} documents; only the first {i} were fetched, as a check asks for at most {} URLs. That is a limit of this validator, not a fault in the index.",
+                idx.documents.len(),
+                budget.max_fetches
+            ));
+            break;
+        }
+        let (mut d, undecided) = fetch_document(e, &domain, token(&domain), fetcher, &budget, opt);
         if undecided {
             decide(&mut d, &publisher, None, opt.now);
         }
-        keep_raw_if_trusted(&mut d);
+        keep_raw_if_trusted(&mut d, opt);
         res.documents.push(d);
     }
 
     for del in &idx.delegates {
+        if crate::budget::checkpoint() {
+            return Ok(res);
+        }
         let mut dr = DelegateResult {
             domain: del.domain.to_lowercase(),
             scope: del.scope.clone(),
@@ -341,9 +453,25 @@ pub fn discover(
         let dr_domain = dr.domain.clone();
         res.delegates.push(dr);
         // One hop only: the delegate's own delegates aren't followed.
-        for e in &didx.documents {
+        if didx.documents.len() > MAX_DOCUMENTS_PER_DELEGATE {
+            res.limits.push(format!(
+                "{dr_domain}'s index lists {} documents; only the first {MAX_DOCUMENTS_PER_DELEGATE} were fetched, as a check reads at most that many from one delegate. That is a limit of this validator, not a fault in the index.",
+                didx.documents.len()
+            ));
+        }
+        for e in didx.documents.iter().take(MAX_DOCUMENTS_PER_DELEGATE) {
+            if crate::budget::checkpoint() {
+                return Ok(res);
+            }
+            if !budget.fetch_ok() {
+                res.limits.push(format!(
+                    "{dr_domain}'s documents were not all fetched, as a check asks for at most {} URLs. That is a limit of this validator, not a fault in the index.",
+                    budget.max_fetches
+                ));
+                break;
+            }
             let (mut d, undecided) =
-                fetch_document(e, &dr_domain, token(&dr_domain), fetcher, &budget);
+                fetch_document(e, &dr_domain, token(&dr_domain), fetcher, &budget, opt);
             if d.publisher != publisher {
                 continue; // the delegate's own documents, or unreadable ones
             }
@@ -351,7 +479,7 @@ pub fn discover(
                 d.delegated_by = domain.clone();
                 decide(&mut d, &publisher, Some(&networks), opt.now);
             }
-            keep_raw_if_trusted(&mut d);
+            keep_raw_if_trusted(&mut d, opt);
             res.documents.push(d);
         }
     }
@@ -424,8 +552,8 @@ fn blank(url: &str, status: Status, publisher: &str) -> DiscoveredDocument {
 
 /// Only a trusted document's bytes are kept (to be saved); the rest are
 /// dropped as soon as they're decided.
-fn keep_raw_if_trusted(d: &mut DiscoveredDocument) {
-    if d.status != Status::Trusted {
+fn keep_raw_if_trusted(d: &mut DiscoveredDocument, opt: &Options) {
+    if d.status != Status::Trusted || !opt.keep_raw {
         d.raw = Vec::new();
     }
 }
@@ -436,6 +564,20 @@ fn fetch_index(
     fetcher: &dyn Fetcher,
     budget: &Budget,
 ) -> Result<(Index, String), Error> {
+    // A delegate's domain comes from someone else's index: it must be a
+    // name, never an address, before anything is requested.
+    if !may_publish(domain, opt) {
+        return Err(Error::msg(format!(
+            "{} isn't a publisher domain (a host name such as harbourline.example)",
+            crate::gofmt::quote(domain)
+        )));
+    }
+    if !budget.fetch_ok() {
+        return Err(Error::msg(format!(
+            "fetching the index: {}",
+            budget.fetch_refusal()
+        )));
+    }
     let u = index_url(domain, opt.allow_local_http);
     // `localhost`, `127.0.0.1` or `[::1]` with an optional port, for testing.
     let local = opt.allow_local_http && is_local_host(domain);
@@ -459,6 +601,7 @@ fn fetch_index(
             url: u.clone(),
             token: None,
             same_host: true,
+            index: true,
         })
         .map_err(|e| Error::msg(format!("fetching the index: {e}")))?;
     if !budget.take(resp.body.len()) {
@@ -524,6 +667,7 @@ fn fetch_document(
     token: &str,
     fetcher: &dyn Fetcher,
     budget: &Budget,
+    opt: &Options,
 ) -> (DiscoveredDocument, bool) {
     let mut d = DiscoveredDocument {
         network: e.network.clone(),
@@ -535,6 +679,11 @@ fn fetch_document(
         listed_by: listed_by.to_string(),
         ..blank(&e.url, Status::Trusted, "")
     };
+    if let Some(why) = unfetchable(&e.url, opt) {
+        d.status = Status::Rejected;
+        d.reason = why;
+        return (d, false);
+    }
     let mut req = Request {
         url: e.url.clone(),
         ..Request::default()

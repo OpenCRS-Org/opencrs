@@ -24,6 +24,81 @@ pub const UNITS_PER_BYTE: u64 = 16;
 /// Units allowed on top, so a tiny document can still be checked fully.
 pub const BASE_UNITS: u64 = 1 << 20;
 
+/// The error text of an operation the host stopped (see [`checkpoint`]).
+/// Internal: a host that stops an operation discards its result.
+pub const INTERRUPTED_CODE: &str = "CRS-INTERRUPTED";
+
+/// Units of work between asks of the host whether to stop.
+#[cfg(target_arch = "wasm32")]
+const POLL_UNITS: u64 = 4096;
+
+/// Calls of [`checkpoint`] between asks of the host.
+#[cfg(target_arch = "wasm32")]
+const POLL_TICKS: u32 = 128;
+
+/// Set when the host asked for the running operation to stop.
+static INTERRUPTED: AtomicBool = AtomicBool::new(false);
+
+/// What the host module has to provide when this crate is built for
+/// WebAssembly: a function that returns non-zero when the running call
+/// should stop (its caller's context ended, say). Native builds have no host
+/// and never ask.
+#[cfg(target_arch = "wasm32")]
+mod host {
+    #[link(wasm_import_module = "env")]
+    unsafe extern "C" {
+        pub safe fn opencrs_interrupted() -> i32;
+    }
+}
+
+/// Asks the host whether to stop, and remembers a yes.
+#[cfg(target_arch = "wasm32")]
+fn host_says_stop() -> bool {
+    if host::opencrs_interrupted() != 0 {
+        INTERRUPTED.store(true, Ordering::Relaxed);
+        return true;
+    }
+    false
+}
+
+/// Whether the host has asked the running operation to stop.
+pub fn interrupted() -> bool {
+    INTERRUPTED.load(Ordering::Relaxed)
+}
+
+/// Forgets an interrupt, at the start and end of an operation.
+pub fn clear_interrupt() {
+    INTERRUPTED.store(false, Ordering::Relaxed);
+}
+
+/// A coarse point of a long loop (a screen read, say). Every so often it
+/// asks the host whether to stop; if so the current budget is spent, so the
+/// work in progress winds down through its ordinary stopping paths, and this
+/// returns true. Costs a counter bump between asks, and nothing at all in a
+/// native build.
+#[inline]
+pub fn checkpoint() -> bool {
+    #[cfg(target_arch = "wasm32")]
+    {
+        use std::sync::atomic::AtomicU32;
+        static TICKS: AtomicU32 = AtomicU32::new(0);
+        if interrupted() {
+            return true;
+        }
+        if TICKS
+            .fetch_add(1, Ordering::Relaxed)
+            .is_multiple_of(POLL_TICKS)
+            && host_says_stop()
+        {
+            if let Some(b) = current() {
+                b.0.tripped.store(true, Ordering::Relaxed);
+            }
+            return true;
+        }
+    }
+    false
+}
+
 /// What a unit of work was spent on.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 pub(crate) enum Work {
@@ -51,6 +126,9 @@ struct State {
     bytes: u64,
     used: AtomicU64,
     tripped: AtomicBool,
+    /// The count of units at which the host is next asked whether to stop.
+    #[cfg(target_arch = "wasm32")]
+    next_poll: AtomicU64,
     /// Per (kind, where it came from): units, and how many times work of that
     /// kind was done there. Updated once per piece of work, not per unit.
     by: Mutex<HashMap<(Work, usize), (u64, u64)>>,
@@ -74,6 +152,22 @@ impl Drop for Guard {
     }
 }
 
+impl State {
+    /// Called with the units used so far: every POLL_UNITS, asks the host
+    /// whether to stop, and spends the budget if so.
+    #[inline]
+    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_variables))]
+    fn poll(&self, used: u64) {
+        #[cfg(target_arch = "wasm32")]
+        if used >= self.next_poll.load(Ordering::Relaxed) {
+            self.next_poll.store(used + POLL_UNITS, Ordering::Relaxed);
+            if host_says_stop() {
+                self.tripped.store(true, Ordering::Relaxed);
+            }
+        }
+    }
+}
+
 impl Budget {
     /// A budget for an input of `bytes` bytes.
     pub fn for_input(bytes: usize) -> Budget {
@@ -82,6 +176,8 @@ impl Budget {
             bytes: bytes as u64,
             used: AtomicU64::new(0),
             tripped: AtomicBool::new(false),
+            #[cfg(target_arch = "wasm32")]
+            next_poll: AtomicU64::new(POLL_UNITS),
             by: Mutex::new(HashMap::new()),
             explanation: Mutex::new(None),
         }))
@@ -156,6 +252,7 @@ pub(crate) fn charge(work: Work, origin: usize, units: u64) -> bool {
         if used > s.limit {
             s.tripped.store(true, Ordering::Relaxed);
         }
+        s.poll(used);
         !s.tripped.load(Ordering::Relaxed)
     })
 }
@@ -168,6 +265,7 @@ pub(crate) fn charge_flat(units: u64) -> bool {
         if used > b.0.limit {
             b.0.tripped.store(true, Ordering::Relaxed);
         }
+        b.0.poll(used);
         !b.0.tripped.load(Ordering::Relaxed)
     })
 }

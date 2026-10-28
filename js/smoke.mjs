@@ -18,10 +18,12 @@ if (!outDir) throw new Error("usage: node smoke.mjs OUT_DIR");
 const wasmPath = `${outDir.replace(/\/$/, "")}/opencrs.wasm`;
 const examples = new URL("../examples/harbourline/", import.meta.url);
 
-// The module takes and gives nothing but numbers: no imports at all.
+// The module takes and gives nothing but numbers, and imports one function:
+// the host's answer to "should this call stop?".
 const wasmBytes = await readFile(wasmPath);
 const compiled = new WebAssembly.Module(wasmBytes);
-assert.equal(WebAssembly.Module.imports(compiled).length, 0, "the module must have no imports");
+assert.deepEqual(WebAssembly.Module.imports(compiled),
+  [{ module: "env", name: "opencrs_interrupted", kind: "function" }], "the module's one import");
 const exported = WebAssembly.Module.exports(compiled).map((e) => e.name).sort();
 for (const name of ["memory", "opencrs_alloc", "opencrs_free", "opencrs_version", "opencrs_lint",
   "opencrs_check", "opencrs_resolve", "opencrs_resolve_strictest", "opencrs_probe_start", "opencrs_probe_feed",
@@ -195,11 +197,23 @@ if (CHECK_PENDING) {
 {
   const index = await text(".well-known/opencrs.json");
   const ok = { status: 200, etag: '"1"', cache_control: "max-age=3600", content_type: "application/json", allow_origin: "*" };
-  const pages = {
-    "https://harbourline.example/.well-known/opencrs.json": { ...ok, body: index },
-    "https://harbourline.example/opencrs/retail.screens.json": { ...ok, body: screens },
-  };
+  const indexURL = "https://harbourline.example/.well-known/opencrs.json";
+  const docURL = "https://harbourline.example/opencrs/retail.screens.json";
+  const pages = {};
+  let w = JSON.parse(api.publisher("harbourline.example", pages, "2026-10-25T12:00:00Z"));
+  assert.deepEqual(w.wanted, [indexURL]);
+  assert.deepEqual(w.wanted_detail, [{ url: indexURL, kind: "index", same_host: true }]);
+  // The reason shown for a URL that isn't in pages can be set; wanted is the same.
+  w = JSON.parse(api.publisher("harbourline.example", pages, "2026-10-25T12:00:00Z", "not fetched (limit)"));
+  assert.deepEqual(w.wanted, [indexURL]);
+  assert.ok(w.error.endsWith("not fetched (limit)"), w.error);
+  pages[indexURL] = { ...ok, body: index };
+  w = JSON.parse(api.publisher("harbourline.example", pages, "2026-10-25T12:00:00Z"));
+  assert.deepEqual(w.wanted, [docURL]);
+  assert.equal(w.wanted_detail[0].kind, "document");
+  pages[docURL] = { ...ok, body: screens };
   const r = JSON.parse(api.publisher("harbourline.example", pages, "2026-10-25T12:00:00Z"));
+  assert.deepEqual(r.wanted, []);
   assert.equal(r.errors, 0, JSON.stringify(r.advice));
   assert.equal(r.discovery.documents[0].status, "trusted");
 }

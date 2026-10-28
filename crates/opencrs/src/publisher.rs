@@ -4,7 +4,8 @@
 //! and not a copy. Each trusted document is then linted, and the way each
 //! file is served is compared with what the spec asks of publishers.
 
-use std::collections::BTreeMap;
+use std::cell::RefCell;
+use std::collections::{BTreeMap, HashSet};
 
 use chrono::{DateTime, FixedOffset};
 use serde::{Deserialize, Serialize};
@@ -16,13 +17,16 @@ use crate::discover::{
 };
 use crate::schema::{Kind, SchemaOptions};
 
-/// One page as fetched, with the response headers the check looks at.
+/// One page as fetched, with the response headers the check looks at. The
+/// body is borrowed, so a page of tens of megabytes is never copied to be
+/// held; it isn't part of the JSON form (see `opencrs-wasm`'s frame).
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
-pub struct Page {
+pub struct Page<'a> {
     /// The HTTP status; zero when the fetch itself failed.
     pub status: u16,
-    pub body: String,
+    #[serde(skip)]
+    pub body: &'a [u8],
     /// Why the fetch failed, when it did.
     pub error: String,
     pub etag: String,
@@ -34,16 +38,39 @@ pub struct Page {
     pub allow_origin: String,
 }
 
-/// Serves discovery from fetched pages. A URL that wasn't fetched fails with
-/// `missing`.
-struct Pages<'a> {
-    pages: &'a BTreeMap<String, Page>,
-    missing: &'a str,
+/// A URL discovery asked for that wasn't among the pages, and what it was
+/// for, so a caller can fetch it with the care it needs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct WantedUrl {
+    pub url: String,
+    /// `index` for a publisher's or delegate's `/.well-known/opencrs.json`,
+    /// `document` for anything else.
+    pub kind: &'static str,
+    /// The fetch must not follow a redirect to another host (an index, or
+    /// a request that would carry credentials).
+    pub same_host: bool,
 }
 
-impl Fetcher for Pages<'_> {
+/// Serves discovery from fetched pages. A URL that wasn't fetched fails with
+/// `missing`, and is recorded in `wanted`, once, in the order discovery asked
+/// for it.
+struct Pages<'a, 'b> {
+    pages: &'a BTreeMap<String, Page<'b>>,
+    missing: &'a str,
+    wanted: RefCell<Vec<WantedUrl>>,
+    asked: RefCell<HashSet<String>>,
+}
+
+impl Fetcher for Pages<'_, '_> {
     fn fetch(&self, req: &Request) -> Result<Response, FetchError> {
         let Some(p) = self.pages.get(&req.url) else {
+            if self.asked.borrow_mut().insert(req.url.clone()) {
+                self.wanted.borrow_mut().push(WantedUrl {
+                    url: req.url.clone(),
+                    kind: if req.index { "index" } else { "document" },
+                    same_host: req.same_host,
+                });
+            }
             return Err(FetchError::Other(format!("{}: {}", req.url, self.missing)));
         };
         if !p.error.is_empty() {
@@ -56,7 +83,7 @@ impl Fetcher for Pages<'_> {
             });
         }
         Ok(Response {
-            body: p.body.clone().into_bytes(),
+            body: p.body.to_vec(),
             etag: p.etag.clone(),
             cache_control: p.cache_control.clone(),
             last_modified: p.last_modified.clone(),
@@ -93,6 +120,15 @@ pub struct PublisherCheck {
     pub advice: Vec<Advice>,
     pub errors: usize,
     pub warnings: usize,
+    /// The URLs discovery asked for that aren't in the pages given, in the
+    /// order it asked, each once. Fetch them, add them to the pages under
+    /// exactly these strings (a failed fetch as a page with status 0 and an
+    /// `error`) and check again; when it is empty the result is final. A URL
+    /// already in the pages is never in it. The publisher chose every one of
+    /// them, so fetch them with the care for an address a stranger picked.
+    pub wanted: Vec<String>,
+    /// The same URLs, with what each is for.
+    pub wanted_detail: Vec<WantedUrl>,
 }
 
 /// A document's name for messages: the last part of its path.
@@ -173,7 +209,7 @@ fn served(out: &mut Vec<Advice>, url: &str, what: &str, p: &Page) {
 /// says why a URL that discovery wanted isn't there (the fetcher's limits).
 pub fn check_publisher(
     domain: &str,
-    pages: &BTreeMap<String, Page>,
+    pages: &BTreeMap<String, Page<'_>>,
     missing: &str,
     now: DateTime<FixedOffset>,
 ) -> PublisherCheck {
@@ -185,7 +221,7 @@ pub fn check_publisher(
 
 fn check_publisher_within(
     domain: &str,
-    pages: &BTreeMap<String, Page>,
+    pages: &BTreeMap<String, Page<'_>>,
     missing: &str,
     now: DateTime<FixedOffset>,
 ) -> PublisherCheck {
@@ -200,6 +236,8 @@ fn check_publisher_within(
         advice: Vec::new(),
         errors: 0,
         warnings: 0,
+        wanted: Vec::new(),
+        wanted_detail: Vec::new(),
     };
     let opt = Options {
         tokens: Default::default(),
@@ -207,9 +245,20 @@ fn check_publisher_within(
         now,
         max_index_entries: 0,
         max_run_bytes: 0,
+        max_fetches: 0,
+        // The pages are held already: a trusted document is linted from
+        // its page, not from a second copy.
+        keep_raw: false,
     };
-    let fetcher = Pages { pages, missing };
+    let fetcher = Pages {
+        pages,
+        missing,
+        wanted: RefCell::new(Vec::new()),
+        asked: RefCell::new(HashSet::new()),
+    };
     let found = discover(&domain, &opt, &fetcher);
+    res.wanted_detail = fetcher.wanted.take();
+    res.wanted = res.wanted_detail.iter().map(|w| w.url.clone()).collect();
     let index_page = pages.get(&res.index_url);
     let found = match found {
         Ok(f) => f,
@@ -217,13 +266,9 @@ fn check_publisher_within(
             res.error = e.to_string();
             // An index that arrived but isn't valid: list everything wrong.
             if let Some(p) = index_page.filter(|p| p.status == 200 && p.error.is_empty()) {
-                res.index_lint = lint(
-                    p.body.as_bytes(),
-                    Some(Kind::Index),
-                    &SchemaOptions::default(),
-                )
-                .ok()
-                .filter(|l| !l.ok());
+                res.index_lint = lint(p.body, Some(Kind::Index), &SchemaOptions::default())
+                    .ok()
+                    .filter(|l| !l.ok());
             }
             res.errors = 1;
             return res;
@@ -232,6 +277,13 @@ fn check_publisher_within(
 
     if let Some(p) = index_page {
         served(&mut res.advice, &res.index_url, "The index", p);
+    }
+    for why in &found.limits {
+        res.advice.push(Advice {
+            severity: Severity::Warning,
+            url: res.index_url.clone(),
+            message: why.clone(),
+        });
     }
     if found.index.documents.is_empty() {
         res.advice.push(Advice {
@@ -254,6 +306,10 @@ fn check_publisher_within(
         }
     }
     for d in &found.documents {
+        // The host may be asking this call to stop.
+        if crate::budget::interrupted() {
+            break;
+        }
         let what = name_of(&d.url);
         let mut say = |severity, message: String| {
             res.advice.push(Advice {
@@ -314,8 +370,14 @@ fn check_publisher_within(
         if let Some(p) = pages.get(&d.url) {
             served(&mut res.advice, &d.url, &what, p);
         }
+        // Each document has a work budget of its own, so one that is too
+        // complex to check can't leave the rest unchecked.
+        let body = pages.get(&d.url).map_or(&d.raw[..], |p| p.body);
         if d.status == Status::Trusted
-            && let Ok(l) = lint(&d.raw, Some(Kind::Screens), &SchemaOptions::default())
+            && let Ok(l) = crate::budget::measure(body.len(), || {
+                lint(body, Some(Kind::Screens), &SchemaOptions::default())
+            })
+            .0
         {
             for c in &l.document_checks {
                 match c.severity {
@@ -359,10 +421,11 @@ mod tests {
         std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()))
     }
 
-    fn good(body: String) -> Page {
+    /// A page for a test; the body is leaked so it can be borrowed for good.
+    fn good(body: String) -> Page<'static> {
         Page {
             status: 200,
-            body,
+            body: Box::leak(body.into_bytes().into_boxed_slice()),
             etag: "\"1\"".into(),
             cache_control: "max-age=3600".into(),
             content_type: "application/json".into(),
@@ -371,7 +434,7 @@ mod tests {
         }
     }
 
-    fn harbourline() -> BTreeMap<String, Page> {
+    fn harbourline() -> BTreeMap<String, Page<'static>> {
         let index = example("examples/harbourline/.well-known/opencrs.json");
         let mut pages = BTreeMap::new();
         pages.insert(INDEX.to_string(), good(index));
@@ -392,6 +455,35 @@ mod tests {
         assert_eq!(d.documents[0].status, Status::Trusted, "{d:?}");
         assert!(r.advice.is_empty(), "{:?}", r.advice);
         assert_eq!((r.errors, r.warnings), (0, 0));
+    }
+
+    #[test]
+    fn wanted_lists_unfetched_urls_once_and_never_a_fetched_one() {
+        // Nothing fetched: the index.
+        let mut pages = BTreeMap::new();
+        let r = check_publisher(DOMAIN, &pages, "not fetched", now());
+        assert_eq!(r.wanted, [INDEX]);
+        assert!(r.error.contains("not fetched"), "{}", r.error);
+
+        // The index is in: its document.
+        let all = harbourline();
+        pages.insert(INDEX.to_string(), all[INDEX].clone());
+        let r = check_publisher(DOMAIN, &pages, "not fetched", now());
+        assert_eq!(r.wanted, [RETAIL]);
+
+        // A failed fetch counts as fetched.
+        pages.insert(
+            RETAIL.to_string(),
+            Page {
+                error: "timed out".into(),
+                ..Page::default()
+            },
+        );
+        let r = check_publisher(DOMAIN, &pages, "not fetched", now());
+        assert!(r.wanted.is_empty(), "{:?}", r.wanted);
+
+        let r = check_publisher(DOMAIN, &all, "not fetched", now());
+        assert!(r.wanted.is_empty(), "{:?}", r.wanted);
     }
 
     #[test]
@@ -455,10 +547,10 @@ mod tests {
     fn expiry_soon_and_old_updates_are_flagged() {
         let mut pages = harbourline();
         let p = pages.get_mut(RETAIL).unwrap();
-        let mut v: serde_json::Value = serde_json::from_str(&p.body).unwrap();
+        let mut v: serde_json::Value = serde_json::from_slice(p.body).unwrap();
         v["expires_at"] = "2026-11-05T00:00:00+11:00".into();
         v["updated_at"] = "2025-01-01T00:00:00+11:00".into();
-        p.body = v.to_string();
+        p.body = Box::leak(v.to_string().into_bytes().into_boxed_slice());
         let r = check_publisher(DOMAIN, &pages, "not fetched", now());
         let msgs: Vec<_> = r
             .advice
@@ -482,10 +574,10 @@ mod tests {
     fn document_problems_come_from_lint() {
         let mut pages = harbourline();
         let p = pages.get_mut(RETAIL).unwrap();
-        let mut v: serde_json::Value = serde_json::from_str(&p.body).unwrap();
+        let mut v: serde_json::Value = serde_json::from_slice(p.body).unwrap();
         v["networks"][0]["rules"]["rule_packs"] =
             serde_json::json!(["au-nsw-transport-corridor@1999-01"]);
-        p.body = v.to_string();
+        p.body = Box::leak(v.to_string().into_bytes().into_boxed_slice());
         let r = check_publisher(DOMAIN, &pages, "not fetched", now());
         let l = r.lints.get(RETAIL).expect("a lint for retail");
         assert_eq!(l.document_checks[0].code, "CRS-RULE-PACK");

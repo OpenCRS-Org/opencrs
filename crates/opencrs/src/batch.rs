@@ -239,6 +239,7 @@ impl<'a> GroupedViews<'a> {
         let mut key = Vec::new();
         doc.resolve_each(&target, |q| {
             // Once the budget is spent, resolve_each says so when it is done.
+            crate::budget::checkpoint();
             if crate::budget::tripped() {
                 return;
             }

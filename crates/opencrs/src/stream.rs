@@ -241,6 +241,9 @@ pub(crate) fn walk(raw: &[u8], reference: &str, sink: &mut impl Sink) -> Result<
     for (ni, list) in lists.iter().enumerate() {
         let mut de = serde_json::Deserializer::from_str(list.get());
         let mut each = |s: Screen| {
+            if crate::budget::checkpoint() {
+                return false;
+            }
             let Some(a) = aim.as_mut().filter(|a| a.network == ni && !a.done) else {
                 return true;
             };
@@ -292,6 +295,10 @@ pub(crate) fn walk(raw: &[u8], reference: &str, sink: &mut impl Sink) -> Result<
             ScreenStream::<Screen>::new(&mut each),
             &mut de,
         );
+        // Stopped by the host: not a document that can't be streamed.
+        if crate::budget::interrupted() {
+            return Err(Error::Message(crate::budget::INTERRUPTED_CODE.to_string()));
+        }
         if read.is_err() || de.end().is_err() {
             return whole(raw, reference, sink);
         }

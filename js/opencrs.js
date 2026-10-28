@@ -1,7 +1,11 @@
 // Loader for the OpenCRS WebAssembly module (opencrs.wasm). A plain ES
 // module for browsers and Node: no build step, no dependencies. The module
-// has no imports; this file moves JSON in and out of its memory and does the
-// two things it can't: hashing (Web Crypto) and reading file ranges.
+// has one import, env.opencrs_interrupted() -> i32, which it calls now and
+// then during long work and which stops the call when it returns non-zero.
+// Calls here are synchronous, so nothing can end one from outside: it
+// returns 0. A host that can (a Go context, say) answers from its own state.
+// This file moves JSON in and out of the module's memory and does the two
+// things it can't: hashing (Web Crypto) and reading file ranges.
 //
 //   import { load } from "./opencrs.js";
 //   const crs = await load(new URL("./opencrs.wasm", import.meta.url));
@@ -44,11 +48,12 @@ export async function load(source) {
   // or runs out of memory, or a RangeError when its stack overflows) can
   // leave it in a bad state, so the instance is dropped and the next call
   // makes a fresh one from the same compiled module.
+  const imports = { env: { opencrs_interrupted: () => 0 } };
   let current = null;
   let instances = 0;
   const exports_ = () => {
     if (!current) {
-      current = new WebAssembly.Instance(module, {}).exports;
+      current = new WebAssembly.Instance(module, imports).exports;
       instances++;
     }
     return current;
@@ -207,13 +212,47 @@ export async function load(source) {
      */
     dwell: (request) => call("opencrs_dwell", request),
     /**
-     * publisher(domain, pages, now?) checks a publisher's published specs from
-     * pages already fetched, keyed by URL: {status, body, error?, etag?,
-     * cache_control?, last_modified?, content_type?, content_encoding?,
-     * allow_origin?}. Discovery, trust and linting are the core's.
+     * publisher(domain, pages, now?, missing?) checks a publisher's published
+     * specs from pages already fetched, keyed by URL: {status, body, error?,
+     * etag?, cache_control?, last_modified?, content_type?,
+     * content_encoding?, allow_origin?}. A body is a string or bytes, and
+     * reaches the module as it is. Discovery, trust and linting are the core's.
+     *
+     * The result's `wanted` is an array of the URLs discovery asked for that
+     * are not in `pages`, in the order it asked, each once; `wanted_detail`
+     * is the same with {url, kind: "index" | "document", same_host}. Fetch
+     * them, add them to `pages` under exactly those strings (a fetch that
+     * failed as {status: 0, error}) and call again; when `wanted` is empty
+     * the result is final. A URL already in `pages` is never in it. Discovery
+     * has at most three rounds: the index, then its documents and delegate
+     * indexes, then the delegates' documents, and asks for at most 2,000 URLs
+     * a round.
+     *
+     * The publisher chose every URL in `wanted`, so fetch them as you would
+     * an address a stranger gave you: HTTPS only, never an internal or
+     * private address (check where the name resolves, and again on every
+     * redirect), no redirect to another host for `same_host`, a cap on the
+     * size of each body and of all of them. When the index itself wasn't
+     * fetched, `error` says so and `wanted` is the index URL. `missing`, if
+     * given, is the reason shown for a URL that isn't in `pages` (default
+     * "not fetched"); it is only text and plays no part in `wanted`.
      */
-    publisher: (domain, pages, now = "", missing = "") =>
-      call("opencrs_publisher", { domain, pages, now: now || new Date().toISOString(), missing }),
+    publisher(domain, pages, now = "", missing = "") {
+      try {
+        const entries = Object.entries(pages);
+        const heads = entries.map(([url, p]) => {
+          const { body, ...head } = p;
+          return { url, ...head };
+        });
+        return callFramed(
+          "opencrs_publisher",
+          { domain, pages: heads, now: now || new Date().toISOString(), missing },
+          entries.map(([, p]) => p.body ?? ""),
+        );
+      } catch (e) {
+        return errorJSON(e);
+      }
+    },
     /** rulePacks() lists the rule packs built into the module. */
     rulePacks: () => call("opencrs_rule_packs", {}),
     /** probe(bytes) is the probe object for one file (throws if it can't be read). */

@@ -25,7 +25,7 @@ jobs:
         run: scripts/build-wasm-docker.sh "$RUNNER_TEMP/wasm"
       - name: The committed opencrs.wasm is what the sources build
         run: cmp "$RUNNER_TEMP/wasm/opencrs.wasm" opencrs.wasm
-      - name: Smoke test (no imports, lint, probing, memory)
+      - name: Smoke test (imports, lint, probing, memory)
         run: node js/smoke.mjs "$RUNNER_TEMP/wasm"
       # The conformance suite through the module, judged by the Rust CLI.
       - name: Conformance suite through the module
