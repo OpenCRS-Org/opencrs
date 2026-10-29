@@ -1229,7 +1229,7 @@ dependencies = [
 
 [[package]]
 name = "opencrs-cli"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anstream",
  "chrono",
@@ -1259,7 +1259,7 @@ dependencies = [
 
 [[package]]
 name = "opencrs-npm"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "chrono",
  "napi",
@@ -1273,7 +1273,7 @@ dependencies = [
 
 [[package]]
 name = "opencrs-py"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "opencrs",
  "opencrs-fetch",
